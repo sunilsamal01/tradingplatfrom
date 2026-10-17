@@ -65,6 +65,12 @@ git config core.hooksPath .githooks
 
 If a credential ever reaches a commit, **rotate it immediately** — removing the commit does not un-leak the value.
 
+## 🚂 Railway deployment
+
+- If frontend and backend are deployed together and the backend serves the built `dist` folder, leave `VITE_API_URL` unset. The production frontend uses the current site origin for API and Socket.IO requests.
+- If deployed as separate Railway services, set `VITE_API_URL` on the **frontend service** to `https://<backend-public-domain>/api`, and set `CLIENT_URL` on the **backend service** to the frontend's public origin. Redeploy/rebuild the frontend after changing `VITE_API_URL`, since Vite embeds it at build time.
+- Confirm the backend is reachable at `https://<backend-public-domain>/api/health`.
+
 ## ⚠️ Disclaimer
 
 This project is intended for software development and educational purposes unless otherwise stated. Verify whether trading, wallet, and payment features use live services or simulated data before relying on them for financial activity.

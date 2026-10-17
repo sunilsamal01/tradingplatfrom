@@ -1,4 +1,7 @@
-const BASE = (import.meta.env.VITE_API_URL || "http://localhost:5000/api").replace(/\/$/, "");
+const DEFAULT_BASE = import.meta.env.DEV
+  ? "http://localhost:5000/api"
+  : `${window.location.origin}/api`;
+const BASE = (import.meta.env.VITE_API_URL || DEFAULT_BASE).replace(/\/$/, "");
 
 let accessToken = null;
 export const setAccessToken = (t) => { accessToken = t || null; };

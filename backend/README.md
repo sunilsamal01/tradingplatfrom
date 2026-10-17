@@ -1,9 +1,10 @@
 # SoloLevelingTrad Backend
-Express + Mongoose ESM API. Frontend (Vite) is separate — never touched.
+Express + Mongoose ESM API. The backend also serves the built Vite frontend from `../dist` when present, including SPA routes.
 ## Setup
 1. `cd backend && npm install`
 2. Copy `.env.example` to `.env`, fill values (Mongo Atlas `MONGODB_URI`, JWT secrets, Firebase Admin, Razorpay/Stripe, SMTP).
-3. `npm run dev` (nodemon) / `npm start` / `npm test` (`node --test tests/`) / `npm run seed` (never in production).
+3. From the repository root, run `npm run build` to create `dist` before starting the backend if it should serve the frontend.
+4. `npm run dev` (nodemon) / `npm start` / `npm test` (`node --test tests/`) / `npm run seed` (never in production).
 ## Auth flow (Firebase client SDK + backend session)
 Frontend signs in with Firebase client SDK (email/password or Google) → gets ID token → `POST /api/auth/login` (or `/session`, `/google`) with `{idToken}` → backend verifies via Admin SDK, upserts Mongo user, creates Session + HttpOnly cookies (`accessToken` 15m, `refreshToken` 30d rotated). Firebase UID always from verified token, never client. Register: `POST /api/auth/register` creates Firebase user (Admin SDK) + Mongo user + OTP email; verify via `/verify-email`. Forgot: `/forgot-password` sends Firebase reset link (generic response).
 ## API summary

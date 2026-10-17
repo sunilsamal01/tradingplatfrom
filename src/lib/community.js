@@ -92,7 +92,7 @@ let socketPromise = null;
 export function connectCommunitySocket() {
   if (socketPromise) return socketPromise;
   const token = getAccessToken();
-  const url = (import.meta.env.VITE_API_URL || "http://localhost:5000/api").replace(/\/api$/, "");
+  const url = api.base.replace(/\/api$/, "");
   socketPromise = import("socket.io-client").then(({ io }) =>
     io(url, { auth: { token }, transports: ["websocket"], reconnection: true, reconnectionAttempts: 8 })
   );

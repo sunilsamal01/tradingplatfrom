@@ -12,6 +12,9 @@ import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { generalLimiter } from './middleware/rateLimitMiddleware.js';
 import { requestContext } from './middleware/requestContext.js';
 import http from 'http';
+import { existsSync } from 'node:fs';
+import { dirname, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { startJobs } from './jobs/cleanup.js';
 import { initSocket } from './socket.js';
 import groups from './routes/groupRoutes.js';
@@ -22,10 +25,13 @@ import rooms from './routes/roomRoutes.js';
 import live from './routes/liveRoutes.js';
 import { startAlgoWorker } from './jobs/algoWorker.js';
 
+const frontendDist = resolve(dirname(fileURLToPath(import.meta.url)), '../dist');
+const frontendIndex = resolve(frontendDist, 'index.html');
+
 // ---------------------------------------------------------------------------
 // Fail fast on insecure production configuration. Booting with the built-in
 // dev JWT secrets in production would let anyone forge sessions.
-// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------
 function assertProductionConfig() {
   if (env.NODE_ENV !== 'production') return;
   const problems = [];
@@ -62,6 +68,7 @@ app.use('/api/webhooks', express.raw({ type: '*/*', limit: '1mb' }));
 app.use(express.json({ limit: '10kb' }));
 app.use(cookieParser()); app.use(mongoSanitize());
 app.use('/uploads', express.static('uploads'));
+app.use(express.static(frontendDist));
 app.use('/api/', generalLimiter);
 app.use('/api', routes);
 app.use('/api/groups', groups);
@@ -70,6 +77,15 @@ app.use('/api/community', community);
 app.use('/api/calls', calls);
 app.use('/api/rooms', rooms);
 app.use('/api/live', live);
+if (existsSync(frontendIndex)) {
+  app.get('*', (req, res, next) => {
+    if (req.path === '/api' || req.path.startsWith('/api/')) return next();
+    if (!req.accepts('html')) return next();
+    res.sendFile(frontendIndex, (err) => {
+      if (err) next(err);
+    });
+  });
+}
 app.use(notFound); app.use(errorHandler);
 const port = env.PORT;
 if (process.env.NODE_ENV !== 'test') {

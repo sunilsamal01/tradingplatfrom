@@ -16,6 +16,6 @@ export const groupApi = {
 export function connectSocket(token) {
   // Lazy-load socket.io-client only where needed.
   return import("socket.io-client").then(({ io }) =>
-    io(import.meta.env.VITE_API_URL?.replace(/\/api$/, "") || "http://localhost:5000", { auth: { token }, transports: ["websocket"] })
+    io(api.base.replace(/\/api$/, ""), { auth: { token }, transports: ["websocket"] })
   );
 }
