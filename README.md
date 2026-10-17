@@ -70,6 +70,7 @@ If a credential ever reaches a commit, **rotate it immediately** — removing th
 - If frontend and backend are deployed together and the backend serves the built `dist` folder, leave `VITE_API_URL` unset. The production frontend uses the current site origin for API and Socket.IO requests.
 - If deployed as separate Railway services, set `VITE_API_URL` on the **frontend service** to `https://<backend-public-domain>/api`, and set `CLIENT_URL` on the **backend service** to the frontend's public origin. Redeploy/rebuild the frontend after changing `VITE_API_URL`, since Vite embeds it at build time.
 - Confirm the backend is reachable at `https://<backend-public-domain>/api/health`.
+- **Single-service setup (default).** The repo ships a root `railway.json` that builds the frontend (`npm run build` → `dist/`), installs the backend, then starts `backend/server.js`, which serves both the API (`/api/*`) and the SPA from one origin. Keep the service **Root Directory** at the repo root. Required variables: `NODE_ENV=production`, `JWT_ACCESS_SECRET`, `JWT_REFRESH_SECRET`, `MONGODB_URI`, plus any `VITE_*` values (they are baked in at build time). Do **not** set `PORT` — Railway injects it. Health check path: `/api/health`.
 
 ## ⚠️ Disclaimer
 
