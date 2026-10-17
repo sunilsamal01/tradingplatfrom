@@ -10,7 +10,7 @@ export function verifyRefresh(t) { return jwt.verify(t, env.JWT_REFRESH_SECRET);
 //
 // The auth cookies MUST survive BOTH deployment shapes:
 //   * one service  — API and SPA share an origin (same-site)
-//   * two services — the SPA is on e.g. sololeveltrad.online and the API is on
+//   * two services — the SPA is on e.g. sololevelingtrad.online and the API is on
 //     a different *.up.railway.app domain (cross-site)
 //
 // `sameSite: 'strict'` silently DROPS the cookie on cross-site requests, so a
