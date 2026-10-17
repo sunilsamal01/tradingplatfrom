@@ -7,7 +7,7 @@ const bool = (v) => String(v || '').trim().toLowerCase() === 'true';
 export const env = {
   PORT: num(process.env.PORT, 5000),
   NODE_ENV: process.env.NODE_ENV || 'development',
-  CLIENT_URL: process.env.CLIENT_URL || 'http://localhost:5173',
+  CLIENT_URL: process.env.CLIENT_URL || 'sololevelingtrad.online',
   // Comma-separated list of additional allowed browser origins (e.g. staging).
   // CLIENT_URL is always allowed; CORS_ORIGIN may add more.
   CORS_ORIGINS: String(process.env.CORS_ORIGIN || '')
