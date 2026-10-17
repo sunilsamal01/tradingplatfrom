@@ -1,6 +1,14 @@
 import rateLimit from 'express-rate-limit';
-const mk = (max, mins = 15) => rateLimit({ windowMs: mins * 60e3, max, standardHeaders: true, legacyHeaders: false, message: { success: false, message: 'Too many requests' } });
-export const generalLimiter = mk(300);
+// Health/liveness must never be throttled: a 429 there is reported by clients
+// (and Railway's probe) as "backend unreachable". It is mounted before the
+// limiter already; this skip is belt-and-braces so a future reorder can't
+// reintroduce the outage.
+const isHealth = (req) => (req.originalUrl || req.url || '').startsWith('/api/health');
+const mk = (max, mins = 15, extra = {}) => rateLimit({ windowMs: mins * 60e3, max, standardHeaders: true, legacyHeaders: false, message: { success: false, message: 'Too many requests' }, ...extra });
+// 900 / 15 min (60/min) per IP. The old 300 (20/min) was low enough that a
+// trading SPA which polls market data, notifications, presence and chat could
+// trip it — and the resulting 429s looked like an outage to users.
+export const generalLimiter = mk(900, 15, { skip: isHealth });
 export const authLimiter = mk(30);
 export const otpLimiter = mk(10, 60);
 export const paymentLimiter = mk(30);

@@ -52,14 +52,14 @@ export default function Pricing() {
         <SectionHeading
           eyebrow="PRICING"
           title="Plans that scale with your edge"
-          desc="Five tiers, billed monthly in USD. Upgrade, downgrade or cancel anytime — your data and history always follow you."
+          desc="Four tiers, billed monthly in USD. Upgrade, downgrade or cancel anytime — your data and history always follow you."
           className="mx-auto max-w-2xl text-center [&>p]:mx-auto"
         />
 
         {/* Loading skeletons */}
         {plans === null && (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
-            {[0, 1, 2, 3, 4].map((i) => (
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+            {[0, 1, 2, 3].map((i) => (
               <div key={i} className="skeleton h-[420px] rounded-2xl" />
             ))}
           </div>
@@ -86,7 +86,7 @@ export default function Pricing() {
 
         {/* Plan cards */}
         {ordered.length > 0 && (
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             {ordered.map((plan, i) => (
               <PlanCard key={plan.id || plan.slug} plan={plan} anim={cardAnim(i)} onChoose={onChoose} currentPlan={user?.plan} />
             ))}

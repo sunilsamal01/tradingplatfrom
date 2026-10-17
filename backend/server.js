@@ -8,6 +8,7 @@ import env from './config/env.js';
 import { connectDB, gracefulShutdown } from './config/database.js';
 import { logger } from './utils/logger.js';
 import routes from './routes/index.js';
+import health from './routes/healthRoutes.js';
 import { notFound, errorHandler } from './middleware/errorMiddleware.js';
 import { generalLimiter } from './middleware/rateLimitMiddleware.js';
 import { requestContext } from './middleware/requestContext.js';
@@ -69,6 +70,10 @@ app.use(express.json({ limit: '10kb' }));
 app.use(cookieParser()); app.use(mongoSanitize());
 app.use('/uploads', express.static('uploads'));
 app.use(express.static(frontendDist));
+// Health/liveness is mounted BEFORE the rate limiter. A 429 on a probe (or on
+// the client's isBackendUp() poll) would be misread as an outage and the UI
+// would report "Backend unreachable".
+app.use('/api', health);
 app.use('/api/', generalLimiter);
 app.use('/api', routes);
 app.use('/api/groups', groups);
@@ -88,8 +93,35 @@ if (existsSync(frontendIndex)) {
 }
 app.use(notFound); app.use(errorHandler);
 const port = env.PORT;
+// Bind explicitly to all interfaces. On Railway the app must be reachable from
+// outside the container; an implicit/localhost-only bind shows up to users as
+// "backend unreachable".
+const host = process.env.HOST || '0.0.0.0';
+
+// A single unhandled rejection / exception would otherwise terminate the
+// process (Node >=15), and Railway would restart it — the gap is exactly the
+// "backend unreachable" window users see. Log instead of dying.
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled rejection: ' + (reason?.stack || reason));
+});
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception: ' + (err?.stack || err));
+});
+
 if (process.env.NODE_ENV !== 'test') {
   assertProductionConfig();
+
+  // Open the port FIRST. DB connect, seeding and background jobs must never
+  // gate startup — if the database is slow/unreachable at boot the API should
+  // still answer (and report db:down on /health) rather than be unreachable.
+  const server = http.createServer(app);
+  const io = initSocket(server, [...allowedOrigins]);
+  app.set('io', io);
+
+  server.on('error', (err) => { logger.error('HTTP server error: ' + err.message); process.exit(1); });
+  server.listen(port, host, () => logger.info(`API on ${host}:${port} (${env.NODE_ENV})`));
+  gracefulShutdown(server);
+
   if (env.MONGODB_URI) {
     connectDB()
       // Idempotent: creates the five launch plans only if their slug is
@@ -97,20 +129,16 @@ if (process.env.NODE_ENV !== 'test') {
       .then(async () => {
         try {
           const { ensureSeedPlans } = await import('./services/planService.js');
-          const { created, skipped } = await ensureSeedPlans();
-          if (created) logger.info(`Pricing plans seeded: ${created} created, ${skipped} existing left untouched`);
+          const { created, skipped, updated, retired } = await ensureSeedPlans();
+          if (created || updated || retired) logger.info(`Pricing plans synced: ${created} created, ${updated} reconciled, ${retired} retired, ${skipped} admin-edited left untouched`);
         } catch (e) { logger.error('Plan seed failed: ' + e.message); }
       })
-      .catch(e => logger.error('DB failed: ' + e.message));
+      .catch(e => logger.error('DB failed (will keep retrying in background): ' + e.message));
   } else logger.warn('MONGODB_URI not set — running without DB');
+
   startJobs();
   try { const { startMarketWarmup } = await import('./jobs/marketWarmup.js'); startMarketWarmup(); } catch {}
   try { const { startAnnouncementScheduler } = await import('./jobs/announcementScheduler.js'); startAnnouncementScheduler(); } catch {}
-  const server = http.createServer(app);
-  const io = initSocket(server, env.CLIENT_URL);
-  app.set('io', io);
   startAlgoWorker();
-  server.listen(port, () => logger.info(`API on :${port}`));
-  gracefulShutdown(server);
 }
 export default app;

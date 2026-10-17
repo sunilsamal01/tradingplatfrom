@@ -1,10 +1,11 @@
 import Payment from '../models/Payment.js';
 import Purchase from '../models/Purchase.js';
 import Subscription from '../models/Subscription.js';
+import Usage from '../models/Usage.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/apiResponse.js';
 import { paginate } from '../utils/sanitize.js';
-import { activateSubscription, cancelSubscription, currentSubscription, listPurchasablePlans, resolvePlanForEntitlement } from '../services/subscriptionService.js';
+import { activateSubscription, cancelSubscription, currentSubscription, listPurchasablePlans, resolvePlanForEntitlement, effectiveEntitlement, limitStatus } from '../services/subscriptionService.js';
 import { resolveCheckoutPlan } from '../services/paymentService.js';
 import { sendSubscriptionEmail } from '../services/emailService.js';
 import User from '../models/User.js';
@@ -83,7 +84,31 @@ export const change = asyncHandler(async (req, res) => {
   await User.findByIdAndUpdate(req.user.sub, { plan: resolved.slug, currentSubscription: s._id });
   return ok(res, 'Plan changed', { subscription: s });
 });
-export const current = asyncHandler(async (req, res) => { const s = await currentSubscription(req.user.sub); return ok(res, 'OK', { subscription: s }); });
+export const current = asyncHandler(async (req, res) => {
+  const [s, user] = await Promise.all([
+    currentSubscription(req.user.sub),
+    User.findById(req.user.sub).select('plan').lean(),
+  ]);
+  // The plan's real benefits travel with the subscription so the profile can
+  // show exactly what the user gets, not just a raw slug.
+  const plan = await effectiveEntitlement(s?.plan || user?.plan || 'FREE');
+  return ok(res, 'OK', { subscription: s, plan });
+});
+
+/** GET /api/subscriptions/entitlements — effective plan + limits for the caller. */
+export const entitlements = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.sub).select('plan').lean();
+  return ok(res, 'OK', await effectiveEntitlement(user?.plan || 'FREE'));
+});
+
+/** GET /api/subscriptions/usage — current AI-usage against the plan's allowance. */
+export const usage = asyncHandler(async (req, res) => {
+  const user = await User.findById(req.user.sub).select('plan').lean();
+  const ent = await effectiveEntitlement(user?.plan || 'FREE');
+  const u = await Usage.findOne({ userId: req.user.sub }).lean();
+  const used = u && u.period === new Date().toISOString().slice(0, 7) ? u.aiCalls : 0;
+  return ok(res, 'OK', { plan: ent.plan, name: ent.name, ...limitStatus(ent.limits.aiLimit, used) });
+});
 export const billing = asyncHandler(async (req, res) => {
   const { page, limit, skip } = paginate(req.query);
   const [payments, total, purchases] = await Promise.all([

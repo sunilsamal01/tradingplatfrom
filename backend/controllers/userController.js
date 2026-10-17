@@ -6,7 +6,7 @@ import Notification from '../models/Notification.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
 import { ok } from '../utils/apiResponse.js';
 import { paginate } from '../utils/sanitize.js';
-import { currentSubscription } from '../services/subscriptionService.js';
+import { currentSubscription, effectiveEntitlement } from '../services/subscriptionService.js';
 import fs from 'fs';
 import path from 'path';
 const PREFS = ['emailNotifications', 'tradeAlerts', 'priceAlerts', 'marketingEmails', 'theme', 'reducedMotion'];
@@ -30,7 +30,16 @@ export const deleteMe = asyncHandler(async (req, res) => { await User.findByIdAn
 export const myActivity = asyncHandler(async (req, res) => { const { page, limit, skip } = paginate(req.query); const [items, total] = await Promise.all([ActivityLog.find({ userId: req.user.sub }).sort({ createdAt: -1 }).skip(skip).limit(limit), ActivityLog.countDocuments({ userId: req.user.sub })]); return ok(res, 'OK', { items, page, limit, total }); });
 export const mySessions = asyncHandler(async (req, res) => { const items = await Session.find({ userId: req.user.sub, revoked: false }); return ok(res, 'OK', { items }); });
 export const myPurchases = asyncHandler(async (req, res) => { const { page, limit, skip } = paginate(req.query); const [items, total] = await Promise.all([Purchase.find({ userId: req.user.sub }).sort({ createdAt: -1 }).skip(skip).limit(limit), Purchase.countDocuments({ userId: req.user.sub })]); return ok(res, 'OK', { items, page, limit, total }); });
-export const mySubscription = asyncHandler(async (req, res) => { const sub = await currentSubscription(req.user.sub); return ok(res, 'OK', { subscription: sub }); });
+export const mySubscription = asyncHandler(async (req, res) => {
+  const [sub, user] = await Promise.all([
+    currentSubscription(req.user.sub),
+    User.findById(req.user.sub).select('plan').lean(),
+  ]);
+  // Include the effective plan + benefit list so the profile can render exactly
+  // what the subscription grants (features, metered AI allowance, limits).
+  const plan = await effectiveEntitlement(sub?.plan || user?.plan || 'FREE');
+  return ok(res, 'OK', { subscription: sub, plan });
+});
 export const myNotifications = asyncHandler(async (req, res) => { const { page, limit, skip } = paginate(req.query); const [items, total] = await Promise.all([Notification.find({ userId: req.user.sub }).sort({ createdAt: -1 }).skip(skip).limit(limit), Notification.countDocuments({ userId: req.user.sub })]); return ok(res, 'OK', { items, page, limit, total }); });
 export const readNotification = asyncHandler(async (req, res) => { const n = await Notification.findOneAndUpdate({ _id: req.params.id, userId: req.user.sub }, { read: true }, { new: true }); if (!n) return res.status(404).json({ success: false, message: 'Not found' }); return ok(res, 'OK', { notification: n }); });
 export const readAllNotifications = asyncHandler(async (req, res) => { await Notification.updateMany({ userId: req.user.sub, read: false }, { $set: { read: true } }); return ok(res, 'All marked read'); });

@@ -31,49 +31,83 @@ export function invalidatePublishedPlansCache() { publishedCache = { at: 0, data
 // purchases only ever resolve to a *published* Plan document.
 // ---------------------------------------------------------------------------
 
-// The five launch tiers. Amounts are integer cents (USD).
+// The four launch tiers. Amounts are integer cents (USD) — $20 / $50 / $100 / $150.
+// Each tier grants a DIFFERENT set of facilities; the `limits` are the numbers
+// that are actually enforced (AI messages/mo) and the `features` are the human
+// -readable benefit list shown on the pricing page and in the user's profile.
 export const DEFAULT_PLANS = [
   {
     name: 'Starter', slug: 'starter', priceCents: 2000, displayOrder: 10,
     blurb: 'Get your edge with real-time market intelligence.',
     description: 'Everything a developing trader needs to follow the market with confidence.',
-    features: ['Live market data (delayed tier)', '10 symbol watchlist', 'Basic AI insights (100/mo)', '3 price alerts', 'Community access'],
-    limits: { aiLimit: 100, watchlists: 10, alerts: 3 },
+    features: [
+      'Real-time market data (top 100 assets)',
+      '10-symbol watchlist',
+      '5 price alerts',
+      'AI trading assistant — 200 messages/mo',
+      'Portfolio tracking (paper)',
+      'Community read access',
+      'Email support',
+    ],
+    limits: { aiLimit: 200, watchlists: 10, alerts: 5 },
     cta: 'Start with Starter',
   },
   {
-    name: 'Basic', slug: 'basic', priceCents: 3000, displayOrder: 20,
+    name: 'Pro', slug: 'pro', priceCents: 5000, displayOrder: 20, recommended: true, badge: 'Most popular',
     blurb: 'Real signals and deeper coverage for active traders.',
-    description: 'Step up to full real-time data, more alerts and a serious AI allowance.',
-    features: ['Real-time market data', '50 symbol watchlist', 'AI insights (500/mo)', '15 price alerts', 'Portfolio tracking', 'Community access'],
-    limits: { aiLimit: 500, watchlists: 50, alerts: 15 },
-    cta: 'Choose Basic',
-  },
-  {
-    name: 'Pro', slug: 'pro', priceCents: 5000, displayOrder: 30, recommended: true, badge: 'Most popular',
-    blurb: 'The full terminal for traders who act on the data.',
-    description: 'Unlimited alerts, advanced analytics and the complete terminal workspace.',
-    features: ['Everything in Basic', 'Unlimited watchlists', 'AI insights (2,500/mo)', 'Unlimited alerts', 'Advanced charting & indicators', 'Algo strategy backtesting', 'Priority support'],
-    limits: { aiLimit: 2500, watchlists: -1, alerts: -1 },
+    description: 'The full working terminal: advanced charts, signals and a serious AI allowance.',
+    features: [
+      'Everything in Starter',
+      'Advanced charting & indicators',
+      '50-symbol watchlist',
+      '25 price alerts',
+      'AI trading assistant — 1,500 messages/mo',
+      'Paper trading + 1 active algo bot',
+      'Signals channel access',
+      'Priority email support',
+    ],
+    limits: { aiLimit: 1500, watchlists: 50, alerts: 25 },
     cta: 'Go Pro',
   },
   {
-    name: 'Elite', slug: 'elite', priceCents: 10000, displayOrder: 40,
-    blurb: 'Desk-grade tooling with deeper analytics and API access.',
-    description: 'For professional desks that need automation, API access and priority throughput.',
-    features: ['Everything in Pro', 'AI insights (10,000/mo)', 'REST API access', 'Algo & automation tools', 'Risk analytics suite', 'Dedicated account manager'],
-    limits: { aiLimit: 10000, watchlists: -1, alerts: -1 },
+    name: 'Elite', slug: 'elite', priceCents: 10000, displayOrder: 30,
+    blurb: 'Desk-grade tooling with deep analytics and API access.',
+    description: 'For serious traders who need automation, risk analytics and API access.',
+    features: [
+      'Everything in Pro',
+      'Unlimited watchlist & alerts',
+      'AI trading assistant — 5,000 messages/mo',
+      'Up to 5 active algo bots',
+      'Live sessions & mentorship rooms',
+      'REST API access (read)',
+      'Risk analytics suite',
+      'Dedicated support',
+    ],
+    limits: { aiLimit: 5000, watchlists: -1, alerts: -1 },
     cta: 'Choose Elite',
   },
   {
-    name: 'Ultimate', slug: 'ultimate', priceCents: 15000, displayOrder: 50,
+    name: 'Ultimate', slug: 'ultimate', priceCents: 15000, displayOrder: 40,
     blurb: 'Everything, unmetered, with white-glove onboarding.',
     description: 'The complete platform with no artificial ceilings and hands-on setup.',
-    features: ['Everything in Elite', 'Unlimited AI insights', 'White-glove onboarding', 'Custom integrations', 'SLA-backed support', 'Team seats included'],
+    features: [
+      'Everything in Elite',
+      'Unlimited AI trading assistant',
+      'Unlimited algo bots',
+      'White-glove onboarding',
+      'Custom integrations & webhooks',
+      'Monthly 1:1 strategy call',
+      'Team seats (3)',
+      'SLA-backed support',
+    ],
     limits: { aiLimit: -1, watchlists: -1, alerts: -1 },
     cta: 'Choose Ultimate',
   },
 ];
+
+// Seed tiers that are no longer part of the catalogue. Archived (not deleted)
+// so existing subscribers keep their entitlements and history.
+export const RETIRED_SEED_SLUGS = ['basic'];
 
 /** Public/admin projection — never leaks internal ids or provenance fields. */
 export function toPublicPlan(p) {
@@ -278,30 +312,71 @@ export async function reorderPlans(actorId, entries) {
 }
 
 /**
- * Idempotent seeding. Creates the five launch tiers ONLY if their slug does
- * not exist yet, so re-running (including on every server boot) never
- * duplicates plans and never clobbers an admin's live edits.
- * Returns { created, skipped }.
+ * Idempotent seeding + reconciliation. Safe to run on every server boot.
+ *
+ *   - a tier whose slug is missing            -> created (published)
+ *   - a tier still exactly as the seeder left  -> reconciled to the canonical
+ *     it (nothing has edited it, `updatedBy` is empty)   price/features/limits
+ *   - a tier an administrator has edited       -> NEVER touched
+ *   - a retired seed tier (e.g. the old Basic) -> archived (not deleted), so
+ *     existing subscribers keep their entitlements and full history
+ *
+ * `updatedBy` is only ever set by an admin write (see updatePlan / setPlanStatus),
+ * so its presence is the reliable "hands off" signal.
+ * Returns { created, skipped, updated, retired }.
  */
+const SEED_KEYS = ['name', 'blurb', 'description', 'priceCents', 'features', 'limits', 'badge', 'recommended', 'cta', 'displayOrder'];
+
 export async function ensureSeedPlans({ actorId = null } = {}) {
   let created = 0;
   let skipped = 0;
+  let updated = 0;
+  let retired = 0;
+
   for (const p of DEFAULT_PLANS) {
-    const exists = await Plan.exists({ slug: p.slug });
-    if (exists) { skipped += 1; continue; }
-    await Plan.create({
-      ...p,
-      currency: 'USD',
-      interval: 'month',
-      status: 'published',
-      providerPriceIds: { razorpay: null, stripe: null },
-      createdBy: actorId,
-      updatedBy: actorId,
-      publishedAt: new Date(),
-    });
-    created += 1;
+    const existing = await Plan.findOne({ slug: p.slug });
+    if (!existing) {
+      await Plan.create({
+        ...p,
+        currency: 'USD',
+        interval: 'month',
+        status: 'published',
+        providerPriceIds: { razorpay: null, stripe: null },
+        createdBy: actorId,
+        updatedBy: actorId,
+        publishedAt: new Date(),
+      });
+      created += 1;
+      continue;
+    }
+
+    // An admin has edited this plan — leave their work alone.
+    if (existing.updatedBy) { skipped += 1; continue; }
+
+    const patch = {};
+    for (const k of SEED_KEYS) {
+      if (p[k] === undefined) continue;
+      if (JSON.stringify(existing[k]) !== JSON.stringify(p[k])) patch[k] = p[k];
+    }
+    if (!Object.keys(patch).length) { skipped += 1; continue; }
+
+    Object.assign(existing, patch, { status: 'published', publishedAt: existing.publishedAt || new Date() });
+    await existing.save();
+    updated += 1;
   }
-  if (created) await audit(actorId, 'plan_seed', 'catalogue', { created, skipped });
-  if (created) invalidatePublishedPlansCache();
-  return { created, skipped };
+
+  // Retire superseded seed tiers. Only ever touches an untouched seed row.
+  for (const slug of RETIRED_SEED_SLUGS) {
+    const r = await Plan.updateOne(
+      { slug, status: 'published', updatedBy: null },
+      { $set: { status: 'archived', archivedAt: new Date() } },
+    );
+    retired += r.modifiedCount || 0;
+  }
+
+  if (created || updated || retired) {
+    await audit(actorId, 'plan_seed', 'catalogue', { created, skipped, updated, retired });
+    invalidatePublishedPlansCache();
+  }
+  return { created, skipped, updated, retired };
 }

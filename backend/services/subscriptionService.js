@@ -1,6 +1,68 @@
 import Subscription from '../models/Subscription.js';
-import { getPlan } from '../config/plans.js';
+import { getPlan, planAiLimit } from '../config/plans.js';
 import { findPlan, listPublishedPlans } from './planService.js';
+
+// ---------------------------------------------------------------------------
+// Effective entitlements.
+//
+// The Plan collection is the source of truth for what a tier grants. The legacy
+// config map only covers FREE and the historical ids (HUNTER/AWAKENED/MONARCH)
+// that pre-date the catalogue. This resolver never throws: an unknown plan
+// degrades to the free allowance so a metered request fails closed with a clean
+// 429, never a 500.
+// ---------------------------------------------------------------------------
+function normaliseLimits(src = {}) {
+  return {
+    aiLimit: Number.isFinite(src.aiLimit) ? src.aiLimit : getPlan('FREE').aiLimit,
+    watchlists: Number.isFinite(src.watchlists) ? src.watchlists : 1,
+    alerts: Number.isFinite(src.alerts) ? src.alerts : 1,
+  };
+}
+
+/** `limit === -1` means unmetered. */
+export function limitStatus(limit, used) {
+  const unlimited = limit === -1 || limit === null || limit === undefined;
+  return {
+    limit: unlimited ? -1 : limit,
+    used,
+    unlimited,
+    allowed: unlimited || used < limit,
+    remaining: unlimited ? -1 : Math.max(0, limit - used),
+  };
+}
+
+export async function effectiveEntitlement(userOrPlanRef) {
+  const ref = String(
+    (typeof userOrPlanRef === 'string' ? userOrPlanRef : userOrPlanRef?.plan) || 'FREE',
+  ).trim();
+
+  const db = await findPlan(ref);
+  if (db) {
+    return {
+      plan: db.slug,
+      name: db.name,
+      currency: db.currency || 'USD',
+      priceCents: db.priceCents ?? 0,
+      features: db.features || [],
+      limits: normaliseLimits(db.limits),
+    };
+  }
+
+  // Legacy ids + FREE.
+  let legacy = null;
+  try { legacy = getPlan(ref); } catch { legacy = getPlan('FREE'); }
+  return {
+    plan: legacy.id,
+    name: legacy.name,
+    currency: 'USD',
+    priceCents: Math.round((legacy.priceINR || 0) * 100),
+    features: legacy.features || [],
+    limits: normaliseLimits({ aiLimit: legacy.aiLimit }),
+  };
+}
+
+/** Convenience: the AI-usage allowance for a plan reference (documents intent). */
+export const aiLimitFor = (planRef) => planAiLimit(planRef);
 
 // Resolves a plan for entitlement/activation purposes. New pricing tiers live
 // in the Plan collection; legacy ids (HUNTER/AWAKENED/MONARCH) still resolve
@@ -49,5 +111,8 @@ export async function listPurchasablePlans() {
     currency: p.currency || 'USD', interval: p.interval || 'month',
     features: p.features || [], recommended: !!p.recommended, badge: p.badge || '',
     blurb: p.blurb || '',
+    // Surfaced so the UI can render the exact metered benefits of each tier.
+    limits: normaliseLimits(p.limits),
+    displayOrder: p.displayOrder ?? 0,
   }));
 }

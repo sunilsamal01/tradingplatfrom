@@ -61,7 +61,7 @@ export default function Subscription() {
       {plans === null ? <SkeletonLoader rows={2} /> : plans.length === 0 ? (
         <EmptyState title="No plans published yet" desc="Pricing is being configured — check back shortly." />
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {plans.map((p) => {
             const cents = Number(p.priceCents ?? 0);
             const sym = p.currency === "USD" ? "$" : p.currency === "INR" ? "₹" : "";

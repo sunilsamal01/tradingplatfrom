@@ -24,3 +24,7 @@ export const intervalLabel = (plan) => {
   const unit = plan?.interval === "year" ? (n > 1 ? "years" : "year") : (n > 1 ? "months" : "month");
   return n > 1 ? `/${n} ${unit}` : `/${unit}`;
 };
+
+/** Human label for a metered limit. -1 / nullish means unmetered. */
+export const formatLimit = (n) =>
+  n === -1 || n === null || n === undefined ? "Unlimited" : Number(n).toLocaleString("en-US");

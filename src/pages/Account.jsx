@@ -1,14 +1,19 @@
 import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
-import { Camera, ShieldCheck, BadgeCheck, Pencil, Settings as SettingsIcon, KeyRound, Trash2, Download, LogOut, Check } from "lucide-react";
+import { Camera, ShieldCheck, BadgeCheck, Pencil, Settings as SettingsIcon, KeyRound, Trash2, Download, LogOut, Check, Crown } from "lucide-react";
 import { useAuth } from "../context/useAuth.js";
 import { api } from "../lib/api.js";
 import { profileApi, resolveAvatar } from "../lib/profile.js";
+import { formatLimit } from "../lib/plans.js";
 import { Card, Button, Badge, Input, FormField, EmptyState } from "../components/ui.jsx";
 import { SkeletonLoader } from "../components/Loaders.jsx";
 
-const RANKS = [["FREE", "E-Rank Hunter"], ["PRO", "C-Rank Hunter"], ["ELITE", "S-Rank Hunter"], ["ADMIN", "Monarch"]];
+// Frozen at module load so render stays pure (React Compiler purity rule).
+const ACCOUNT_PAGE_LOAD = Date.now();
+
+// Solo-Leveling rank shown on the profile, keyed by the subscription slug.
+const RANKS = [["FREE", "E-Rank Hunter"], ["STARTER", "D-Rank Hunter"], ["PRO", "C-Rank Hunter"], ["ELITE", "S-Rank Hunter"], ["ULTIMATE", "Shadow Monarch"]];
 const rankFor = (plan, role) => role === "admin" ? "Monarch" : (RANKS.find(([p]) => p === String(plan).toUpperCase())?.[1] || "E-Rank Hunter");
 const anim = (rm) => rm ? {} : { initial: { opacity: 0, y: 14 }, animate: { opacity: 1, y: 0 } };
 const stagger = (rm, i) => rm ? {} : { initial: { opacity: 0, y: 12 }, animate: { opacity: 1, y: 0 }, transition: { delay: i * 0.06 } };
@@ -82,6 +87,77 @@ function EditForm({ user, onChange, notify }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// Subscription & benefits card. Shows the plan the user actually holds, the
+// renewal date, the metered allowances and the full feature list — this is what
+// appears in the profile once a purchase is fulfilled.
+// ---------------------------------------------------------------------------
+function SubscriptionCard({ sub, plan }) {
+  const active = sub?.status === "active";
+  const expires = sub?.expiresAt ? new Date(sub.expiresAt) : null;
+  const daysLeft = expires ? Math.max(0, Math.ceil((expires.getTime() - ACCOUNT_PAGE_LOAD) / 864e5)) : null;
+  const limits = plan?.limits || {};
+  const meters = [
+    ["AI assistant", limits.aiLimit, "messages / mo"],
+    ["Watchlist", limits.watchlists, "symbols"],
+    ["Price alerts", limits.alerts, "alerts"],
+  ];
+
+  return (
+    <Card className="bg-white/[0.02] backdrop-blur-xl sm:col-span-2 lg:col-span-4">
+      <div className="flex flex-wrap items-start gap-3">
+        <span className="grid h-10 w-10 place-items-center rounded-xl bg-gradient-to-br from-violet-600/40 to-cyan-500/20 text-violet-200">
+          <Crown size={18} aria-hidden />
+        </span>
+        <div className="min-w-0">
+          <p className="text-[11px] uppercase tracking-widest text-white/40">Your subscription</p>
+          <p className="text-lg font-semibold text-white">
+            {plan?.name || "Free"}
+            {plan?.priceCents ? <span className="ml-2 text-xs font-normal text-white/50">${(plan.priceCents / 100).toLocaleString()}/mo</span> : null}
+          </p>
+        </div>
+        <div className="ml-auto text-right">
+          <Badge tone={active ? "success" : "default"}>{active ? "Active" : (sub?.status || "Free tier")}</Badge>
+          {expires && (
+            <p className="mt-1 text-xs text-white/50">
+              {active ? "Renews" : "Ended"} {expires.toLocaleDateString()}
+              {active && daysLeft !== null ? ` · ${daysLeft}d left` : ""}
+            </p>
+          )}
+        </div>
+      </div>
+
+      {/* Metered allowances — the numbers the backend actually enforces. */}
+      <div className="mt-4 grid gap-2 sm:grid-cols-3">
+        {meters.map(([label, val, unit]) => (
+          <div key={label} className="rounded-lg border border-white/10 px-3 py-2">
+            <p className="text-[11px] uppercase tracking-widest text-white/40">{label}</p>
+            <p className="mt-0.5 text-sm font-semibold text-white">{formatLimit(val)}</p>
+            <p className="text-[11px] text-white/40">{val === -1 ? "no ceiling" : unit}</p>
+          </div>
+        ))}
+      </div>
+
+      {plan?.features?.length ? (
+        <ul className="mt-4 grid gap-2 sm:grid-cols-2">
+          {plan.features.map((f) => (
+            <li key={f} className="flex items-start gap-2 text-xs leading-relaxed text-white/70">
+              <Check size={14} className="mt-0.5 shrink-0 text-emerald-400" aria-hidden />
+              <span>{f}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap gap-2">
+        {!active && <Button size="sm" to="/pricing">Upgrade plan</Button>}
+        {active && <Button size="sm" variant="secondary" to="/subscription">Manage subscription</Button>}
+        <Button size="sm" variant="ghost" to="/purchases">Payment history</Button>
+      </div>
+    </Card>
+  );
+}
+
 export default function Account() {
   const { user, setUser, logout } = useAuth();
   const rm = useReducedMotion();
@@ -90,6 +166,7 @@ export default function Account() {
   const switchTab = (t) => { setTab(t); setParams(t === "overview" ? {} : { tab: t }, { replace: true }); };
   const [toast, setToast] = useState(null);
   const [sub, setSub] = useState(null);
+  const [subPlan, setSubPlan] = useState(null);
   const [purchases, setPurchases] = useState(null);
   const [activity, setActivity] = useState(null);
   const [sessions, setSessions] = useState(null);
@@ -99,7 +176,7 @@ export default function Account() {
   const applyUser = (u) => setUser({ ...user, ...u });
 
   useEffect(() => {
-    profileApi.subscription().then((d) => setSub(d?.subscription || d)).catch(() => setSub(null));
+    profileApi.subscription().then((d) => { setSub(d?.subscription || null); setSubPlan(d?.plan || null); }).catch(() => { setSub(null); setSubPlan(null); });
     profileApi.activity().then((d) => setActivity(d?.items || [])).catch(() => setActivity([]));
     api.get("/users/me/sessions").then((d) => setSessions(d?.sessions || d?.items || [])).catch(() => setSessions([]));
   }, []);
@@ -166,9 +243,10 @@ export default function Account() {
         <div className="mt-4">
           {tab === "overview" && (
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-              {[["Purchases", purchases?.length ?? "—", "Verified backend orders"], ["Plan", user?.plan || sub?.plan || "FREE", sub?.status || "No subscription"], ["Rank", rankFor(user?.plan, user?.role), "Solo Leveling tier"], ["Member since", user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : "—", user?.email]].map(([t, v, s], i) => (
+              {[["Purchases", purchases?.length ?? "—", "Verified backend orders"], ["Plan", subPlan?.name || user?.plan || "FREE", sub?.status || "No active subscription"], ["Rank", rankFor(subPlan?.plan || user?.plan, user?.role), "Solo Leveling tier"], ["Member since", user?.createdAt ? new Date(user.createdAt).toLocaleDateString() : "—", user?.email]].map(([t, v, s], i) => (
                 <motion.div key={t} {...stagger(rm, i)}><Card className="bg-white/[0.02] backdrop-blur-xl"><p className="text-xs uppercase tracking-widest text-white/40">{t}</p><p className="mt-1 text-lg font-semibold text-white">{String(v)}</p><p className="mt-1 truncate text-xs text-white/50">{String(s)}</p></Card></motion.div>
               ))}
+              <SubscriptionCard sub={sub} plan={subPlan} />
               <Card className="bg-white/[0.02] backdrop-blur-xl sm:col-span-2 lg:col-span-4">
                 <h2 className="text-sm font-medium text-white">Recent purchases</h2>
                 {purchases === null ? <div className="mt-3"><SkeletonLoader rows={2} /></div> : purchases.length === 0 ? <div className="mt-2"><EmptyState title="No purchases yet" desc="Your verified orders will appear here." /></div> :

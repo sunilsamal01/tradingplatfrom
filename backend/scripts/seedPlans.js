@@ -2,11 +2,9 @@ import mongoose from 'mongoose';
 import env from '../config/env.js';
 
 // ---------------------------------------------------------------------------
-// Seeds the five launch pricing tiers. IDEMPOTENT — safe to run repeatedly.
-//
-// It only *creates* a plan whose slug does not already exist, so re-running
-// (including on every server boot via `ensureSeedPlans`) never duplicates
-// plans and never overwrites an administrator's live price edits.
+// Seeds/reconciles the four launch pricing tiers ($20/$50/$100/$150). IDEMPOTENT
+// — safe to run repeatedly. It creates a missing tier and reconciles one that is
+// still untouched, but NEVER overwrites an administrator's live edits.
 //
 //   node scripts/seedPlans.js
 //   npm run seed:plans
@@ -23,10 +21,10 @@ for (const p of DEFAULT_PLANS) {
   console.log(`    ${p.name.padEnd(10)} ${p.slug.padEnd(10)} $${(p.priceCents / 100).toFixed(2)}/mo`);
 }
 
-const { created, skipped } = await ensureSeedPlans();
+const { created, skipped, updated, retired } = await ensureSeedPlans();
 
 const all = await listAllPlans();
-console.log(`\nResult: ${created} created, ${skipped} already existed (left untouched).`);
+console.log(`\nResult: ${created} created, ${updated} reconciled, ${retired} retired, ${skipped} left untouched (admin-edited).`);
 console.log(`Catalogue now has ${all.length} plan(s):`);
 for (const p of all) {
   console.log(`    [${p.status.padEnd(9)}] ${p.name.padEnd(10)} ${p.slug.padEnd(10)} ${(p.priceCents / 100).toFixed(2)} ${p.currency} /${p.interval}`);

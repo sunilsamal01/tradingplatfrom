@@ -2,6 +2,9 @@
   "name": "sololevelingtrad-backend",
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": ">=20.0.0"
+  },
   "scripts": {
     "dev": "nodemon server.js",
     "start": "node server.js",
