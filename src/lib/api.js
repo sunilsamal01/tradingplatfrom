@@ -1,12 +1,29 @@
-// Production note: Vite inlines VITE_API_URL at *build* time, so a split
-// deployment (frontend and backend as separate Railway services) needs it in
-// the build environment, not just at runtime. When it is missing the SPA falls
-// back to its own origin and `/api/*` returns the SPA's index.html instead of
-// JSON, which the UI reports as "Backend unreachable".
-const DEFAULT_BASE = import.meta.env.DEV
-  ? "http://localhost:5000/api"
-  : `${window.location.origin}/api`;
-const BASE = (import.meta.env.VITE_API_URL || DEFAULT_BASE).replace(/\/$/, "");
+// Where the API lives in production.
+//
+// Vite inlines VITE_API_URL at *build* time, so it has to be present in the
+// build environment - setting it at runtime is too late. That also means a
+// value set only on the hosting service never reaches the browser, which is
+// how "/api returned index.html instead of JSON" happens.
+//
+// Split deployment (frontend and backend are separate services): the SPA is
+// served from its own domain and must call the backend's public origin, so the
+// mapping is explicit here. Override with VITE_API_URL when available.
+//
+// Single-service deployment (the backend serves the built dist folder): the
+// hostname matches nothing below and falls through to same-origin, which is
+// correct because one origin serves both the SPA and the API.
+const SPLIT_API_BASES = {
+  "sololevelingtrad.online": "https://backend-production-3067.up.railway.app/api",
+};
+
+function resolveApiBase() {
+  const configured = import.meta.env.VITE_API_URL;
+  if (configured) return configured;
+  if (import.meta.env.DEV) return "http://localhost:5000/api";
+  return SPLIT_API_BASES[window.location.hostname] || `${window.location.origin}/api`;
+}
+
+const BASE = resolveApiBase().replace(/\/$/, "");
 
 let accessToken = null;
 export const setAccessToken = (t) => { accessToken = t || null; };
