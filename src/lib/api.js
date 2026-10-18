@@ -1,3 +1,8 @@
+// Production note: Vite inlines VITE_API_URL at *build* time, so a split
+// deployment (frontend and backend as separate Railway services) needs it in
+// the build environment, not just at runtime. When it is missing the SPA falls
+// back to its own origin and `/api/*` returns the SPA's index.html instead of
+// JSON, which the UI reports as "Backend unreachable".
 const DEFAULT_BASE = import.meta.env.DEV
   ? "http://localhost:5000/api"
   : `${window.location.origin}/api`;
