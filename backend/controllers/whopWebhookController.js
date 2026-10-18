@@ -9,6 +9,11 @@ import {
   whopWebhookConfigured,
 } from '../services/whopService.js';
 import { confirmDeposit, failDeposit, reverseDeposit } from '../services/walletService.js';
+import {
+  settleWhopCheckoutOrder,
+  failWhopCheckoutOrder,
+  refundWhopCheckoutOrder,
+} from '../services/checkoutService.js';
 
 // ---------------------------------------------------------------------------
 // Whop webhook endpoint — POST /api/webhooks/whop
@@ -114,46 +119,77 @@ async function dispatch(type, data, { reference, eventId, providerPaymentId }) {
       if (!reference) {
         return { status: 'unmatched', message: 'Event stored for reconciliation (no order reference)', error: 'missing_order_reference' };
       }
+      const providerAmount = Number.isFinite(Number(data.total)) ? Number(data.total)
+        : (Number.isFinite(Number(data.usd_total)) ? Number(data.usd_total) : null);
+      const providerCurrency = data.currency ? String(data.currency).toUpperCase() : null;
+
+      // A reference is either a wallet top-up or a subscription order, never
+      // both. Whichever owns it decides the outcome.
       const r = await confirmDeposit({
         reference,
         providerPaymentId,
         providerEventId: eventId,
-        providerAmount: Number.isFinite(Number(data.total)) ? Number(data.total)
-          : (Number.isFinite(Number(data.usd_total)) ? Number(data.usd_total) : null),
-        providerCurrency: data.currency ? String(data.currency).toUpperCase() : null,
+        providerAmount,
+        providerCurrency,
         source: 'webhook',
       });
-      if (!r.found) return { status: 'unmatched', message: 'Event stored for reconciliation', error: 'local_deposit_not_found' };
-      if (r.mismatch) return { status: 'failed', message: 'Amount mismatch — held for review', error: `amount mismatch: expected ${r.expected}, got ${r.providerAmount}`, reference };
-      if (r.discrepancy) return { status: 'failed', message: 'Hold mismatch — held for review', error: 'missing_hold', reference };
-      if (r.alreadyPaid) return { status: 'processed', message: 'Already processed', reference };
-      if (r.terminal) return { status: 'processed', message: `Deposit already ${r.terminal}`, reference };
-      return { status: 'processed', message: 'Deposit credited', reference };
+      if (r.found) {
+        if (r.mismatch) return { status: 'failed', message: 'Amount mismatch — held for review', error: `amount mismatch: expected ${r.expected}, got ${r.providerAmount}`, reference };
+        if (r.discrepancy) return { status: 'failed', message: 'Hold mismatch — held for review', error: 'missing_hold', reference };
+        if (r.alreadyPaid) return { status: 'processed', message: 'Already processed', reference };
+        if (r.terminal) return { status: 'processed', message: `Deposit already ${r.terminal}`, reference };
+        return { status: 'processed', message: 'Deposit credited', reference };
+      }
+
+      const sub = await settleWhopCheckoutOrder({ reference, providerPaymentId, providerAmount, providerCurrency });
+      if (sub) {
+        if (sub.mismatch) return { status: 'failed', message: 'Amount mismatch — held for review', error: sub.reason, reference };
+        if (sub.alreadyPaid) return { status: 'processed', message: 'Subscription order already paid', reference };
+        return { status: 'processed', message: 'Subscription activated', reference };
+      }
+
+      return { status: 'unmatched', message: 'Event stored for reconciliation', error: 'no wallet deposit or checkout order for this reference' };
     }
 
     case 'payment.failed': {
       if (!reference) return { status: 'unmatched', message: 'Event stored for reconciliation', error: 'missing_order_reference' };
-      const r = await failDeposit({ reference, reason: data.failure_message || data.decline_code || 'The payment provider reported this payment as unsuccessful.' });
-      if (!r.found) return { status: 'unmatched', message: 'Event stored for reconciliation', error: 'local_deposit_not_found' };
-      return { status: 'processed', message: 'Deposit marked failed', reference };
+      const reason = data.failure_message || data.decline_code || 'The payment provider reported this payment as unsuccessful.';
+      const r = await failDeposit({ reference, reason });
+      if (r.found) return { status: 'processed', message: 'Deposit marked failed', reference };
+      const sub = await failWhopCheckoutOrder({ reference, reason });
+      if (sub) return { status: 'processed', message: sub.terminal ? `Order already ${sub.terminal}` : 'Subscription order marked failed', reference };
+      return { status: 'unmatched', message: 'Event stored for reconciliation', error: 'no wallet deposit or checkout order for this reference' };
     }
 
     // Buyer must complete 3D Secure off-session: not a success, not a failure.
-    // We only record it — credit still waits for payment.succeeded.
+    // We only record it — credit still waits for payment.succeeded. When Whop
+    // supplies a recovery link we surface it so the UI can offer it back to the
+    // buyer (it never starts a charge on its own).
     case 'payment.requires_action':
     case 'payment.pending':
     case 'payment.authorized':
       return { status: 'processed', message: 'Pending state recorded', reference };
 
     case 'refund.created':
+    case 'refund.updated':
     case 'payment.refunded': {
       if (!reference) return { status: 'unmatched', message: 'Event stored for reconciliation', error: 'missing_order_reference' };
       try {
         await reverseDeposit({ reference, providerEventId: eventId, reason: 'Refund issued by the payment provider' });
         return { status: 'processed', message: 'Refund reversal recorded', reference };
       } catch (e) {
-        if (e instanceof AppError) return { status: 'ignored', message: e.message, reference };
-        throw e;
+        if (!(e instanceof AppError)) throw e;
+        // Not a wallet deposit. A subscription refund is recorded, but access is
+        // retained to the end of the paid period — revoking is an admin choice.
+        const sub = await refundWhopCheckoutOrder({ reference, reason: 'Refund issued by the payment provider' });
+        if (sub) {
+          return {
+            status: 'processed',
+            message: sub.wasPaid ? 'Subscription refund recorded — access retained to period end' : 'Refund recorded',
+            reference,
+          };
+        }
+        return { status: 'ignored', message: e.message, reference };
       }
     }
 

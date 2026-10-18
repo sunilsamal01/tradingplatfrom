@@ -144,6 +144,7 @@ export function toAdminPlan(p) {
     providerPriceIds: {
       razorpay: p.providerPriceIds?.razorpay || null,
       stripe: p.providerPriceIds?.stripe || null,
+      whop: p.providerPriceIds?.whop || null,
     },
     createdBy: p.createdBy ? { id: String(p.createdBy._id || p.createdBy), email: p.createdBy.email || null } : null,
     updatedBy: p.updatedBy ? { id: String(p.updatedBy._id || p.updatedBy), email: p.updatedBy.email || null } : null,
@@ -228,7 +229,7 @@ function pickWritable(patch = {}) {
   }
   if (patch.providerPriceIds !== undefined) {
     const pp = patch.providerPriceIds || {};
-    out.providerPriceIds = { razorpay: pp.razorpay || null, stripe: pp.stripe || null };
+    out.providerPriceIds = { razorpay: pp.razorpay || null, stripe: pp.stripe || null, whop: pp.whop || null };
   }
   return out;
 }

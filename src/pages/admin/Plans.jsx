@@ -40,6 +40,9 @@ const emptyForm = () => ({
   recommended: false,
   cta: "Choose plan",
   displayOrder: "0",
+  whopPlanId: "",
+  razorpayPriceId: "",
+  stripePriceId: "",
 });
 
 const toForm = (p) => ({
@@ -59,6 +62,10 @@ const toForm = (p) => ({
   recommended: !!p.recommended,
   cta: p.cta || "Choose plan",
   displayOrder: String(p.displayOrder ?? 0),
+  // Provider ids are carried through the form so a save never drops them.
+  whopPlanId: p.providerPriceIds?.whop || "",
+  razorpayPriceId: p.providerPriceIds?.razorpay || "",
+  stripePriceId: p.providerPriceIds?.stripe || "",
 });
 
 export default function AdminPlans() {
@@ -154,6 +161,13 @@ export default function AdminPlans() {
       recommended: !!form.recommended,
       cta: form.cta.trim() || "Choose plan",
       displayOrder: num(form.displayOrder, 0),
+      // Sent as a whole object (the service replaces it), so every id must be
+      // included — otherwise saving would silently unlink the other providers.
+      providerPriceIds: {
+        whop: form.whopPlanId?.trim() || null,
+        razorpay: form.razorpayPriceId?.trim() || null,
+        stripe: form.stripePriceId?.trim() || null,
+      },
     };
   };
 
@@ -390,6 +404,22 @@ export default function AdminPlans() {
               <FormField label="Watchlists (−1 = unlimited)"><Input value={f.watchlists} onChange={(e) => setField("watchlists", e.target.value)} inputMode="numeric" className="num" /></FormField>
               <FormField label="Alerts (−1 = unlimited)"><Input value={f.alerts} onChange={(e) => setField("alerts", e.target.value)} inputMode="numeric" className="num" /></FormField>
               <FormField label="CTA button label"><Input value={f.cta} onChange={(e) => setField("cta", e.target.value)} /></FormField>
+
+              <FormField label="Whop variant ID" className="sm:col-span-2">
+                <Input value={f.whopPlanId} onChange={(e) => setField("whopPlanId", e.target.value)} placeholder="plan_xxxxxxxxxxxxx" className="num" />
+              </FormField>
+              <p className="-mt-2 text-xs text-white/40 sm:col-span-2">
+                Paste the variant id from your Whop dashboard to sell this plan with the card form
+                embedded on your own checkout page. The variant&apos;s price must match the price above —
+                a payment whose amount does not match is held for review instead of activating the plan.
+              </p>
+
+              <FormField label="Razorpay plan ID (optional)">
+                <Input value={f.razorpayPriceId} onChange={(e) => setField("razorpayPriceId", e.target.value)} placeholder="plan_…" className="num" />
+              </FormField>
+              <FormField label="Stripe price ID (optional)">
+                <Input value={f.stripePriceId} onChange={(e) => setField("stripePriceId", e.target.value)} placeholder="price_…" className="num" />
+              </FormField>
 
               <label className="flex items-center gap-2 text-sm text-white/70 sm:col-span-2">
                 <input type="checkbox" checked={f.recommended} onChange={(e) => setField("recommended", e.target.checked)} className="h-4 w-4 accent-cyan-400" />

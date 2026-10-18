@@ -254,6 +254,12 @@ export function verifyRazorpayWebhook(rawBody, signature) {
 }
 export async function refund(provider, paymentId, amount) {
   if (provider === 'stripe') return stripeClient().refunds.create({ payment_intent: paymentId });
+  if (provider === 'whop') {
+    // Whop refunds the payment by id and takes a decimal major-unit amount.
+    // Same call the wallet-deposit refund path uses — one audited refund path.
+    const { refundDepositPayment } = await import('./whopService.js');
+    return refundDepositPayment(paymentId, amount ? Math.round(amount * 100) : null, 'Admin refund');
+  }
   return razorpayClient().payments.refund(paymentId, { amount: amount ? amount * 100 : undefined });
 }
 export const rbacCan = (role, action) => {

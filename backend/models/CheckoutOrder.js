@@ -69,7 +69,7 @@ const s = new mongoose.Schema({
   simulated: { type: Boolean, default: false },
 
   // ---- provider linkage ----------------------------------------------------
-  provider: { type: String, enum: ['razorpay', 'stripe', 'none'] },
+  provider: { type: String, enum: ['razorpay', 'stripe', 'whop', 'none'] },
   providerOrderId: { type: String, index: true, sparse: true },
   providerPaymentId: { type: String },
   paymentId: { type: mongoose.Schema.Types.ObjectId, ref: 'Payment' },

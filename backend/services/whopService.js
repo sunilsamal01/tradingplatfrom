@@ -24,12 +24,16 @@ import { logger } from '../utils/logger.js';
 // this module.
 // ---------------------------------------------------------------------------
 
+// The events this endpoint actually acts on. The authoritative list is the one
+// configured on the webhook in the Whop dashboard — keep the two in step.
 export const WHOP_EVENTS_SUBSCRIBED = [
   'payment.succeeded',
   'payment.failed',
   'payment.requires_action',
   'payment.pending',
+  'payment.authorized',
   'refund.created',
+  'refund.updated',
   'dispute.created',
   'dispute.updated',
 ];
@@ -228,8 +232,14 @@ const fmtMinor = (c) => `$${(Number(c) / 100).toFixed(2)}`;
 // opaque reference as metadata, and the return URL. It does NOT get a price to
 // assert (the variant defines it), a secret, or a payment id.
 // ---------------------------------------------------------------------------
-export function publicCheckoutInfo({ reference, planId }) {
+export function publicCheckoutInfo({ reference, planId, returnPath }) {
   const base = (env.APP_URL || env.CLIENT_URL || '').replace(/\/+$/, '');
+  // The return path is chosen by the SERVER. Only a same-site relative path is
+  // accepted, so a bad caller cannot turn our own return URL into an open
+  // redirect on Whop's side.
+  const path = typeof returnPath === 'string' && /^\/[^/\\]/.test(returnPath)
+    ? returnPath
+    : `/wallet/transactions?deposit=${encodeURIComponent(reference)}`;
   return {
     provider: 'whop',
     providerLabel: 'Whop',
@@ -240,10 +250,25 @@ export function publicCheckoutInfo({ reference, planId }) {
     metadata: { order_reference: reference },
     // Whop appends `payment` + `status` here; both are DISPLAY ONLY and are
     // never treated as proof of payment.
-    returnUrl: `${base}/wallet/transactions?deposit=${encodeURIComponent(reference)}`,
+    returnUrl: `${base}${path}`,
     // Lets the UI fail honestly if credentials are missing.
     configured: whopConfigured(),
   };
+}
+
+/**
+ * Client-safe config for a SUBSCRIPTION checkout element.
+ *
+ * The element is mounted inside our own checkout page — the buyer never leaves
+ * the site, and the money settles to this Whop account. `orderId` is our
+ * CheckoutOrder `_id` (already opaque); the buyer only ever sees it in a URL.
+ */
+export function subscriptionCheckoutInfo({ orderId, reference, planId }) {
+  return publicCheckoutInfo({
+    reference,
+    planId,
+    returnPath: `/checkout/success?id=${encodeURIComponent(String(orderId))}`,
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -70,10 +70,15 @@ export async function mountWhopCheckout({ planId, metadata, returnUrl, container
     },
   });
 
+  // Documented usage is `checkout.create(id).mount(selector)`, and the target
+  // element has to exist before mount() runs — so the markup goes in first.
   const mountId = `whop-checkout-${Math.random().toString(36).slice(2, 8)}`;
-  checkout.create(mountId);
   container.innerHTML = `<div id="${mountId}"></div>`;
-  checkout.mount(`#${mountId}`);
+  const element = checkout.create(mountId);
+  // Documented builds return the element from create(); fall back to the handle
+  // if a build exposes mount() only there, rather than throwing at the user.
+  const target = element && typeof element.mount === "function" ? element : checkout;
+  target.mount(`#${mountId}`);
 
   return {
     destroy() {

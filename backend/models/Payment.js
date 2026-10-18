@@ -1,7 +1,7 @@
 import mongoose from 'mongoose';
 const s = new mongoose.Schema({
   userId:{type:mongoose.Schema.Types.ObjectId,ref:'User',required:true,index:true},
-  provider:{type:String,enum:['razorpay','stripe'],required:true},
+  provider:{type:String,enum:['razorpay','stripe','whop'],required:true},
   providerOrderId:String,
   providerPaymentId:String,
   // `amount` is the legacy MAJOR-unit figure (rupees/dollars) kept for existing

@@ -332,10 +332,16 @@ export async function providerConfigStatus() {
   const provider = paymentProvider();
   const rzpKeysSet = !!env.RAZORPAY_KEY_ID && !!env.RAZORPAY_KEY_SECRET;
   const stripeKeySet = !!env.STRIPE_SECRET_KEY;
-  const active = provider === 'stripe' ? stripeKeySet : rzpKeysSet;
+  const { whopConfigured, whopWebhookConfigured, whopEnvironment } = await import('./whopService.js');
+  const whopKeysSet = whopConfigured();
+  const active = provider === 'stripe' ? stripeKeySet
+    : provider === 'whop' ? whopKeysSet
+      : rzpKeysSet;
   const warnings = [];
   if (!active) {
-    warnings.push(`No ${provider} credentials are configured. Checkout cannot create live orders until keys are added to the server environment.`);
+    warnings.push(provider === 'whop'
+      ? 'No Whop credentials are configured. Subscriptions cannot start until WHOP_COMPANY_API_KEY and WHOP_COMPANY_ID are added, and each plan is linked to a Whop variant id.'
+      : `No ${provider} credentials are configured. Checkout cannot create live orders until keys are added to the server environment.`);
   }
   if (provider === 'razorpay' && !env.RAZORPAY_WEBHOOK_SECRET) {
     warnings.push('RAZORPAY_WEBHOOK_SECRET is missing — webhook signatures cannot be verified, so payments will never be marked paid automatically.');
@@ -343,13 +349,19 @@ export async function providerConfigStatus() {
   if (provider === 'stripe' && !env.STRIPE_WEBHOOK_SECRET) {
     warnings.push('STRIPE_WEBHOOK_SECRET is missing — Stripe events are not verified over a webhook. Customers who return from checkout still settle server-side (Stripe is queried directly), but a checkout abandoned before returning will never finish on its own. Point a webhook at checkout.session.completed to close that gap.');
   }
-  // Live/test mode is inferred from the key shape (Razorpay: rzp_live_ / rzp_test_).
+  if (provider === 'whop' && !whopWebhookConfigured()) {
+    warnings.push('WHOP_WEBHOOK_SECRET is missing — Whop events cannot be verified, so a paid subscription would never be activated (and no wallet top-up would be credited). Register the webhook and copy its ws_ secret.');
+  }
+  // Live/test mode is inferred from the key shape (Razorpay: rzp_live_ /
+  // rzp_test_) or, for Whop, from WHOP_SANDBOX.
   let mode = 'unknown';
   if (provider === 'razorpay' && env.RAZORPAY_KEY_ID) mode = env.RAZORPAY_KEY_ID.startsWith('rzp_live_') ? 'live' : 'test';
   if (provider === 'stripe' && env.STRIPE_SECRET_KEY) mode = env.STRIPE_SECRET_KEY.startsWith('sk_live_') ? 'live' : 'test';
+  if (provider === 'whop' && whopKeysSet) mode = whopEnvironment() === 'production' ? 'live' : 'sandbox';
   if (mode === 'live') warnings.push('LIVE MODE: real money will be charged. Confirm merchant activation and webhook configuration before accepting traffic.');
-  // Both supported providers are driven by their official hosted checkout page,
-  // so there is no "provider not wired up" case to warn about any more.
+  // Every supported provider is driven by its official checkout — hosted for
+  // Razorpay/Stripe, embedded in our own page for Whop — so there is no
+  // "provider not wired up" case to warn about any more.
 
   const { cryptoSettlementStatus } = await import('./checkoutService.js');
   return {
@@ -360,9 +372,12 @@ export async function providerConfigStatus() {
     credentials: {
       razorpay: { keyId: rzpKeysSet, keySecret: rzpKeysSet, webhookSecret: !!env.RAZORPAY_WEBHOOK_SECRET },
       stripe: { secretKey: stripeKeySet, webhookSecret: !!env.STRIPE_WEBHOOK_SECRET },
+      whop: { apiKey: !!env.WHOP_COMPANY_API_KEY, companyId: !!env.WHOP_COMPANY_ID, webhookSecret: !!env.WHOP_WEBHOOK_SECRET },
     },
     activeProviderConfigured: active,
-    webhookVerified: provider === 'stripe' ? !!env.STRIPE_WEBHOOK_SECRET : !!env.RAZORPAY_WEBHOOK_SECRET,
+    webhookVerified: provider === 'stripe' ? !!env.STRIPE_WEBHOOK_SECRET
+      : provider === 'whop' ? whopWebhookConfigured()
+        : !!env.RAZORPAY_WEBHOOK_SECRET,
     crypto: cryptoSettlementStatus(),
     checkout: {
       quoteTtlSeconds: env.QUOTE_TTL_SECONDS,

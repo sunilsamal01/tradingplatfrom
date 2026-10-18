@@ -397,9 +397,41 @@ export async function createPaymentSession({ userId, orderId }) {
   // ---- Provider session ---------------------------------------------------
   const { createProviderOrder, createStripeCheckoutSession, paymentProvider } = await import('./paymentService.js');
   const provider = paymentProvider();
-  // Both providers are driven by their official hosted checkout page, so this
-  // single code path supports either one. Razorpay renders its Checkout window
-  // over the page (keyId + order id); Stripe redirects to a hosted session.
+
+  // Whop runs the whole checkout inside OUR page (the Checkout element), so
+  // there is nothing to create server-side and no secret to hand the browser:
+  // the variant prices the order, and the signed webhook is what settles it.
+  // Only subscriptions can be bought this way — Whop has no crypto flow.
+  if (provider === 'whop') {
+    if (order.type !== 'subscription') {
+      throw new AppError('This order type cannot be paid with Whop', 409, 'PROVIDER_UNSUPPORTED');
+    }
+    const plan = await resolvePurchasablePlan(order.planSlug);
+    const planId = plan?.providerPriceIds?.whop || null;
+    if (!planId) {
+      throw new AppError('This plan is not linked to a Whop checkout yet. Please contact support.', 409, 'PLAN_NOT_LINKED');
+    }
+    const { subscriptionCheckoutInfo } = await import('./whopService.js');
+    order.provider = 'whop';
+    order.status = 'awaiting_payment';
+    await order.save();
+    return {
+      mode: 'whop',
+      requiresPayment: true,
+      provider: 'whop',
+      // Client-safe only: which variant to buy, our opaque reference, and where
+      // Whop sends the buyer afterwards. No secret and no asserted amount —
+      // the variant defines the price, and the webhook defines the outcome.
+      whop: subscriptionCheckoutInfo({ orderId: order._id, reference: order.reference, planId }),
+      amountCents: order.totalCents,
+      currency: order.currency,
+      order: publicOrder(order),
+    };
+  }
+
+  // Razorpay and Stripe are both driven by their official hosted checkout page,
+  // so this single code path supports either one. Razorpay renders its Checkout
+  // window over the page (keyId + order id); Stripe redirects to a hosted session.
   let gateway;
   if (provider === 'stripe') {
     // Prefill from the account record — server-side, not browser-supplied.
@@ -534,6 +566,26 @@ export async function fulfilOrder(order) {
 }
 
 /**
+ * The single "money is confirmed" transition: mark paid, fulfil exactly once,
+ * audit. Shared by the Razorpay/Stripe path and the Whop path so they cannot
+ * drift apart.
+ */
+async function markPaidAndFulfil(order, { paymentId, providerPaymentId, providerOrderId } = {}) {
+  order.status = 'paid';
+  order.paidAt = new Date();
+  if (providerPaymentId) order.providerPaymentId = providerPaymentId;
+  if (providerOrderId) order.providerOrderId = providerOrderId;
+  if (paymentId) order.paymentId = paymentId;
+  await order.save();
+
+  const fulfilment = await fulfilOrder(order);
+  await audit(order.userId, 'checkout_order_paid', order.reference, {
+    type: order.type, total: order.totalCents, currency: order.currency, ...fulfilment,
+  });
+  return fulfilment;
+}
+
+/**
  * Settle a CheckoutOrder after its provider payment is confirmed. Called from
  * /payments/verify and from the webhook — both are idempotent, and so is this.
  */
@@ -542,17 +594,136 @@ export async function settleCheckoutOrder({ providerOrderId, payment, providerPa
   if (!order) return null;
   if (order.status === 'paid') return { order, alreadyPaid: true };
 
-  order.status = 'paid';
-  order.paidAt = new Date();
-  if (providerPaymentId) order.providerPaymentId = providerPaymentId;
-  if (payment) order.paymentId = payment._id;
-  await order.save();
-
-  const fulfilment = await fulfilOrder(order);
-  await audit(order.userId, 'checkout_order_paid', order.reference, {
-    type: order.type, total: order.totalCents, currency: order.currency, ...fulfilment,
+  const fulfilment = await markPaidAndFulfil(order, {
+    paymentId: payment ? payment._id : undefined,
+    providerPaymentId,
   });
   return { order, alreadyPaid: false, fulfilment };
+}
+
+// ---------------------------------------------------------------------------
+// Whop settlement (webhook-driven)
+//
+// Unlike Razorpay/Stripe, a Whop order has no server-side session, so there is
+// no provider order id to look the order up by. The element attaches our own
+// reference as metadata and Whop copies it onto the payment and every event
+// about it, so the reconciliation key here is `reference`.
+//
+// Safety rule: entitlement is granted only when the amount and currency the
+// buyer actually paid match what we recorded. Anything else is reported as a
+// mismatch and left for an admin — never credited blindly.
+// ---------------------------------------------------------------------------
+
+/** Decimal major units (Whop reports dollars) -> integer minor units. */
+const toMinorUnits = (v) => {
+  // A missing amount must read as "unknown", never as "$0 paid" — an absent
+  // total would otherwise look like a deliberate underpayment.
+  if (v === null || v === undefined || v === '') return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.round(n * 100) : null;
+};
+
+/** Find a Whop-settled order by our own reference. Returns null if unknown. */
+async function findWhopOrder(reference) {
+  const ref = String(reference || '').trim();
+  if (!ref) return null;
+  const order = await CheckoutOrder.findOne({ reference: ref });
+  if (!order) return null;
+  // A reference that belongs to a Razorpay/Stripe order must never be settled
+  // by a Whop event, however the event was produced.
+  return order.provider === 'whop' ? order : null;
+}
+
+/**
+ * Confirm a subscription paid through the Whop checkout element.
+ *
+ * Returns one of:
+ *   null                                   — no such Whop order (caller keeps looking)
+ *   { alreadyPaid: true }                  — idempotent replay
+ *   { mismatch: true, reason, expectedMinor, providerMinor }
+ *   { order, fulfilment, paymentId }       — settled
+ */
+export async function settleWhopCheckoutOrder({ reference, providerPaymentId, providerAmount, providerCurrency }) {
+  const order = await findWhopOrder(reference);
+  if (!order) return null;
+  if (order.status === 'paid') return { order, alreadyPaid: true };
+
+  const expectedMinor = order.totalCents;
+  const paidMinor = toMinorUnits(providerAmount);
+  if (paidMinor == null) {
+    return { order, mismatch: true, reason: 'provider reported no amount', expectedMinor, providerMinor: null };
+  }
+  if (paidMinor !== expectedMinor) {
+    return { order, mismatch: true, reason: `amount mismatch: expected ${expectedMinor}, got ${paidMinor}`, expectedMinor, providerMinor: paidMinor };
+  }
+  const paidCurrency = providerCurrency ? String(providerCurrency).toUpperCase() : null;
+  if (paidCurrency && paidCurrency !== String(order.currency || '').toUpperCase()) {
+    return { order, mismatch: true, reason: `currency mismatch: expected ${order.currency}, got ${paidCurrency}`, expectedMinor, providerMinor: paidMinor };
+  }
+  if (!providerPaymentId) {
+    return { order, mismatch: true, reason: 'provider reported no payment id', expectedMinor, providerMinor: paidMinor };
+  }
+
+  // Canonical Payment row, so admin revenue/refund tooling sees Whop like any
+  // other provider. Scoped to THIS order so a provider id that somehow appears
+  // against a different order can never be adopted as this one's payment.
+  let pay = await Payment.findOne({ providerOrderId: providerPaymentId, checkoutOrderId: order._id });
+  if (!pay) {
+    pay = await Payment.create({
+      userId: order.userId,
+      provider: 'whop',
+      providerOrderId: providerPaymentId,
+      providerPaymentId,
+      amount: expectedMinor / 100,
+      amountCents: expectedMinor,
+      currency: order.currency,
+      plan: order.planSlug || order.reference,
+      status: 'paid',
+      checkoutOrderId: order._id,
+    });
+  }
+
+  const fulfilment = await markPaidAndFulfil(order, {
+    paymentId: pay._id,
+    providerPaymentId,
+    providerOrderId: providerPaymentId,
+  });
+  return { order, alreadyPaid: false, fulfilment, paymentId: String(pay._id) };
+}
+
+/** Mark a Whop order failed. Never downgrades a paid/refunded order. */
+export async function failWhopCheckoutOrder({ reference, reason }) {
+  const order = await findWhopOrder(reference);
+  if (!order) return null;
+  if (['paid', 'refunded', 'cancelled'].includes(order.status)) return { order, terminal: order.status };
+
+  order.status = 'failed';
+  order.failureReason = String(reason || 'The payment provider reported this payment as unsuccessful.').slice(0, 300);
+  await order.save();
+  await audit(order.userId, 'checkout_order_failed', order.reference, { provider: 'whop', reason: order.failureReason });
+  return { order };
+}
+
+/**
+ * Record a provider refund against a Whop order.
+ *
+ * Access is deliberately NOT revoked: the subscription runs to the end of the
+ * period that was already paid for. Revoking entitlement is an explicit admin
+ * decision, never a side effect of a refund event.
+ */
+export async function refundWhopCheckoutOrder({ reference, reason }) {
+  const order = await findWhopOrder(reference);
+  if (!order) return null;
+  const wasPaid = order.status === 'paid';
+
+  order.status = 'refunded';
+  order.failureReason = String(reason || 'Refund issued by the payment provider').slice(0, 300);
+  await order.save();
+  if (order.paymentId) {
+    try { await Payment.updateOne({ _id: order.paymentId }, { $set: { status: 'refunded' } }); } catch { /* payment row is advisory */ }
+  }
+  await audit(order.userId, 'checkout_order_refunded', order.reference, { provider: 'whop', wasPaid });
+  return { order, wasPaid };
 }
 
 // ---------------------------------------------------------------------------

@@ -42,11 +42,14 @@ const s = new mongoose.Schema({
   status: { type: String, enum: ['draft', 'published', 'archived'], default: 'draft', index: true },
   displayOrder: { type: Number, default: 0, index: true },
 
-  // Provider identifiers — filled in from the Razorpay/Stripe dashboards.
+  // Provider identifiers — filled in from the Razorpay/Stripe/Whop dashboards.
   // Never invented by the app; null means "not linked yet".
+  // `whop` is the VARIANT id (`plan_…`), which is what the Whop checkout
+  // element takes and what defines the price on Whop's side.
   providerPriceIds: {
     razorpay: { type: String, default: null },
     stripe: { type: String, default: null },
+    whop: { type: String, default: null },
   },
 
   // Provenance for the audit trail shown in the admin panel.

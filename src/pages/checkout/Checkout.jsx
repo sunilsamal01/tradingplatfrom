@@ -8,6 +8,7 @@ import { PageLoader } from "../../components/Loaders.jsx";
 import { StepIndicator } from "../../components/checkout/StepIndicator.jsx";
 import { StepPane, ReviewStep, CustomerStep, PaymentStep, FinalStep } from "../../components/checkout/Steps.jsx";
 import { checkout, loadRazorpay, openRazorpay } from "../../lib/checkout.js";
+import { mountWhopCheckout } from "../../lib/whop.js";
 import { cn } from "../../lib/utils.js";
 
 // ---------------------------------------------------------------------------
@@ -59,6 +60,9 @@ export default function Checkout() {
   const [quantity, setQuantity] = useState(qtyParam || "0.01");
   const [order, setOrder] = useState(null);
   const [session, setSession] = useState(null);
+  // Server-provided Whop element config, set once the server has approved this
+  // order for an embedded card payment (session mode === "whop").
+  const [whop, setWhop] = useState(null);
   const [step, setStep] = useState(1);
   const [busy, setBusy] = useState(false);
   const [stepError, setStepError] = useState("");
@@ -72,6 +76,7 @@ export default function Checkout() {
 
   const sectionRef = useRef(null);
   const quoteSeq = useRef(0);
+  const whopContainer = useRef(null);
 
   const intentId = useMemo(
     () => (isCrypto ? `crypto:${assetParam}:${quantity}` : `plan:${planSlug || "unknown"}`),
@@ -193,6 +198,22 @@ export default function Checkout() {
         return;
       }
 
+      // Embedded Whop checkout: the card is entered ON THIS PAGE, so there is no
+      // redirect and nothing to fulfil here. The element prices the order from
+      // the server-chosen variant, and the signed webhook settles it — so we
+      // just mount it and let the result page ask the server what happened.
+      if (sess.mode === "whop") {
+        if (!sess.whop?.configured) {
+          setStepError("Card payments aren't configured on the server yet. Please contact support.");
+          setBusy(false);
+          return;
+        }
+        clearIntent();
+        setWhop(sess.whop);
+        setBusy(false);
+        return;
+      }
+
       // Hosted Stripe checkout: leave for Stripe's own payment page and return
       // to /checkout/success, which confirms the payment server-side. Nothing
       // about the price or the outcome is taken from this redirect.
@@ -242,6 +263,38 @@ export default function Checkout() {
       setBusy(false);
     }
   };
+
+  // ---- embedded Whop element ---------------------------------------------
+  // Mounted only after the server has approved the order and named the variant
+  // to sell. The element owns the card fields; its onComplete is analytics only,
+  // because fulfilment happens on the server from the signed webhook.
+  useEffect(() => {
+    if (!whop || !order || !whopContainer.current) return undefined;
+    let alive = true;
+    let widget = null;
+    (async () => {
+      try {
+        widget = await mountWhopCheckout({
+          planId: whop.planId,
+          metadata: whop.metadata,
+          returnUrl: whop.returnUrl,
+          container: whopContainer.current,
+          onComplete: (completion) => {
+            if (completion?.result !== "payment") return;
+            navigate(`/checkout/success?id=${order.id}`);
+          },
+        });
+      } catch (e) {
+        if (alive) setStepError(e?.message || "Couldn't open the payment form. Please try again.");
+      }
+    })();
+    return () => {
+      alive = false;
+      if (widget) {
+        try { widget.destroy(); } catch { /* element teardown is best-effort */ }
+      }
+    };
+  }, [whop, order, navigate]);
 
   // ---- guards / empty states ---------------------------------------------
   if (!planSlug && !assetParam && !resumeId) {
@@ -347,6 +400,19 @@ export default function Checkout() {
                 busy={busy}
                 blocked={stepError || undefined}
               />
+            )}
+
+            {step === 4 && whop && (
+              <div className="mt-5 rounded-2xl border border-white/10 bg-white/[0.02] p-4 sm:p-5">
+                <div className="mb-2 flex items-center gap-2">
+                  <ShieldCheck className="h-4 w-4 text-emerald-400" />
+                  <p className="text-xs font-medium text-white">Complete your payment securely on this page</p>
+                </div>
+                <p className="mb-4 text-xs text-white/50">
+                  Card details are handled by Whop. Your plan activates automatically once the payment is confirmed.
+                </p>
+                <div ref={whopContainer} />
+              </div>
             )}
           </StepPane>
 

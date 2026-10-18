@@ -17,12 +17,13 @@ import { paymentProvider } from '../services/paymentService.js';
 
 const isConfigured = () => {
   const p = paymentProvider();
-  return p === 'stripe'
-    ? !!env.STRIPE_SECRET_KEY
-    : !!env.RAZORPAY_KEY_ID && !!env.RAZORPAY_KEY_SECRET;
+  if (p === 'stripe') return !!env.STRIPE_SECRET_KEY;
+  if (p === 'whop') return !!env.WHOP_COMPANY_API_KEY && !!env.WHOP_COMPANY_ID;
+  return !!env.RAZORPAY_KEY_ID && !!env.RAZORPAY_KEY_SECRET;
 };
-// Providers whose official checkout flow this page actually drives.
-const SUPPORTED_CHECKOUT_PROVIDERS = ['razorpay', 'stripe'];
+// Providers whose checkout flow this page actually drives. Razorpay and Stripe
+// host theirs; Whop's element is embedded inside our own page.
+const SUPPORTED_CHECKOUT_PROVIDERS = ['razorpay', 'stripe', 'whop'];
 
 // ---------------------------------------------------------------------------
 // POST /api/checkout/quote — server-priced, signed, expiring quote.
@@ -104,11 +105,12 @@ export const config = asyncHandler(async (req, res) => {
   // The provider's own secure window renders the live method list (UPI, cards,
   // net banking, wallets, EMI…) for whatever the merchant account has enabled,
   // so we never draw a method we cannot prove is enabled.
-  const providerLabel = provider === 'stripe' ? 'Stripe' : 'Razorpay';
+  const providerLabel = provider === 'stripe' ? 'Stripe' : provider === 'whop' ? 'Whop' : 'Razorpay';
   const supported = SUPPORTED_CHECKOUT_PROVIDERS.includes(provider);
   // Only advertised when it is actually reachable, and worded to match how the
   // provider really behaves: Razorpay overlays a window, Stripe continues to a
-  // hosted page. Neither card form is rendered by us.
+  // hosted page, and Whop's card form is rendered inside this page. Only Whop's
+  // form is one we host — the other two card forms are never rendered by us.
   const paymentMethods = configured && supported
     ? [{
         id: 'provider_checkout',
@@ -118,7 +120,9 @@ export const config = asyncHandler(async (req, res) => {
         icon: 'lock',
         detail: provider === 'stripe'
           ? "Continues to Stripe's hosted payment page. Cards, wallets and other methods Stripe supports appear there when enabled for this merchant and available in your region."
-          : `Opens ${providerLabel}'s secure payment window. UPI, credit/debit cards, net banking, wallets and EMI appear there when enabled for this merchant and available in your region.`,
+          : provider === 'whop'
+            ? 'Enter your card details here, on this page — the payment form is provided by Whop and your plan activates automatically once the payment is confirmed.'
+            : `Opens ${providerLabel}'s secure payment window. UPI, credit/debit cards, net banking, wallets and EMI appear there when enabled for this merchant and available in your region.`,
       }]
     : [];
   return ok(res, 'Checkout config', {
