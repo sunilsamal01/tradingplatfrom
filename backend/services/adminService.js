@@ -332,7 +332,7 @@ export async function providerConfigStatus() {
   const provider = paymentProvider();
   const rzpKeysSet = !!env.RAZORPAY_KEY_ID && !!env.RAZORPAY_KEY_SECRET;
   const stripeKeySet = !!env.STRIPE_SECRET_KEY;
-  const { whopConfigured, whopWebhookConfigured, whopEnvironment } = await import('./whopService.js');
+  const { whopConfigured, whopWebhookConfigured, whopEnvironment, recommendedWebhookUrl } = await import('./whopService.js');
   const whopKeysSet = whopConfigured();
   const active = provider === 'stripe' ? stripeKeySet
     : provider === 'whop' ? whopKeysSet
@@ -375,6 +375,9 @@ export async function providerConfigStatus() {
       whop: { apiKey: !!env.WHOP_COMPANY_API_KEY, companyId: !!env.WHOP_COMPANY_ID, webhookSecret: !!env.WHOP_WEBHOOK_SECRET },
     },
     activeProviderConfigured: active,
+    // Where the operator must register the webhook, when we can determine it.
+    // Never APP_URL: that origin rejects POST, so a webhook there never fires.
+    webhookUrl: provider === 'whop' ? recommendedWebhookUrl() : null,
     webhookVerified: provider === 'stripe' ? !!env.STRIPE_WEBHOOK_SECRET
       : provider === 'whop' ? whopWebhookConfigured()
         : !!env.RAZORPAY_WEBHOOK_SECRET,

@@ -47,6 +47,22 @@ export function whopWebhookConfigured() {
 export function whopEnvironment() {
   return env.WHOP_SANDBOX ? 'sandbox' : 'production';
 }
+
+/**
+ * The exact URL to register on the Whop webhook.
+ *
+ * Railway exposes this service's own public domain, so we can hand the operator
+ * a URL that is definitely correct. Deliberately NOT derived from APP_URL: that
+ * is the FRONTEND origin, which serves only the SPA and answers 405 to a POST,
+ * so a webhook registered there would never settle a payment. Returns null when
+ * the domain is unknown (local dev), and the docs cover that case.
+ */
+export function recommendedWebhookUrl() {
+  const host = String(process.env.RAILWAY_PUBLIC_DOMAIN || '').trim().replace(/^https?:\/\//, '').replace(/\/+$/, '');
+  if (!host) return null;
+  return `https://${host}/api/webhooks/whop`;
+}
+
 /** Admin-facing status. Presence + mode only — NEVER a secret. */
 export function whopProviderStatus() {
   return {
@@ -54,6 +70,8 @@ export function whopProviderStatus() {
     label: 'Whop',
     configured: whopConfigured(),
     webhookConfigured: whopWebhookConfigured(),
+    // The URL to register on the dashboard, when we can determine it.
+    webhookUrl: recommendedWebhookUrl(),
     environment: whopEnvironment(),
     sandbox: !!env.WHOP_SANDBOX,
     companyIdConfigured: Boolean(env.WHOP_COMPANY_ID),

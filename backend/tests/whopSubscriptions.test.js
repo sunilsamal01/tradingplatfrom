@@ -388,6 +388,23 @@ test('a late failure never downgrades a refunded order', { skip }, async () => {
 // 4. Admin wiring — the operator can actually link a variant
 // ---------------------------------------------------------------------------
 
+test('the recommended webhook URL is the backend origin, never APP_URL', { skip }, async () => {
+  const had = process.env.RAILWAY_PUBLIC_DOMAIN;
+  delete process.env.RAILWAY_PUBLIC_DOMAIN;
+  assert.equal(whop.recommendedWebhookUrl(), null, 'unknown locally — never guessed from APP_URL');
+
+  process.env.RAILWAY_PUBLIC_DOMAIN = 'backend.example.test';
+  assert.equal(whop.recommendedWebhookUrl(), 'https://backend.example.test/api/webhooks/whop');
+  // APP_URL is the frontend origin; using it would send events to a 405.
+  assert.ok(!whop.recommendedWebhookUrl().startsWith(process.env.APP_URL));
+
+  const bare = 'https://backend.example.test/';
+  process.env.RAILWAY_PUBLIC_DOMAIN = bare;
+  assert.equal(whop.recommendedWebhookUrl(), 'https://backend.example.test/api/webhooks/whop');
+
+  if (had === undefined) delete process.env.RAILWAY_PUBLIC_DOMAIN; else process.env.RAILWAY_PUBLIC_DOMAIN = had;
+});
+
 test('the admin plan payload carries the Whop variant id', { skip }, async () => {
   const plan = await makePlan({ slug: `admin_${tag()}`, whopId: 'plan_admin_linked' });
   const admin = planService.toAdminPlan(plan);

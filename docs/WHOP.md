@@ -9,7 +9,7 @@ Official `@whop/sdk@2.5.0` on the server, plus Whop's **checkout element** in th
 | `WHOP_COMPANY_ID` | `biz_…` |
 | `WHOP_WEBHOOK_SECRET` | `ws_…`, used verbatim (including the `ws_` prefix) |
 | `WHOP_SANDBOX` | `true` by default; remove only for verified live mode |
-| `APP_URL` | public origin, no trailing slash — builds the return URL |
+| `APP_URL` | public origin of the **frontend**, no trailing slash — builds the `returnUrl` (the webhook is registered on the **backend** origin; see below) |
 | `WHOP_DEPOSIT_PRODUCT_ID` | `prod_…` for top-up checkout links (only if deposits are enabled) |
 | `WHOP_DEPOSIT_PLAN_IDS` | `<cents>:<plan_…>,…` — checkout links created **in the merchant dashboard** |
 | `WALLET_DEPOSITS_ENABLED` | `false` — see `docs/WALLET.md` |
@@ -22,7 +22,7 @@ Client bundles receive only `planId`, `environment`, `metadata.order_reference` 
 1. Work in **sandbox.whop.com** while `WHOP_SANDBOX=true`.
 2. Create the products/plans for the five subscription tiers and copy each variant id into the matching `Plan.providerPriceIds.whop` (plans are managed in the existing admin Pricing screen; prices are always resolved server-side).
 3. Create one checkout link per top-up amount → list as `WHOP_DEPOSIT_PLAN_IDS`.
-4. **Webhooks → add endpoint**: `APP_URL + /api/webhooks/whop`, subscribing to `payment.succeeded`, `payment.failed`, `payment.pending`, `payment.requires_action`, `payment.authorized`, `refund.created`, `refund.updated`, `dispute.created`, `dispute.updated`. The list on the dashboard is authoritative — keep it in step with `WHOP_EVENTS_SUBSCRIBED`.
+4. **Webhooks → add endpoint**: the BACKEND origin + `/api/webhooks/whop`, e.g. `https://<backend-domain>/api/webhooks/whop`. **Not `APP_URL`** — that is the FRONTEND origin, which serves only the SPA and answers `405` to a `POST`, so events sent there are never processed and no plan is ever activated. `GET /api/admin/wallet/config` reports the exact URL as `webhookUrl`. Subscribe to `payment.succeeded`, `payment.failed`, `payment.pending`, `payment.requires_action`, `payment.authorized`, `refund.created`, `refund.updated`, `dispute.created`, `dispute.updated`. The list on the dashboard is authoritative — keep it in step with `WHOP_EVENTS_SUBSCRIBED`.
 5. Copy the signing secret into `WHOP_WEBHOOK_SECRET`.
 6. API key permissions needed: `payment:basic:read`, `payment:manage`, `plan:create`, `access_pass:create`.
 7. Test cards: `4242 … 4242` succeeds · `4000 0000 0000 0002` declines · `5385 3083 6013 5181` is 3DS.
