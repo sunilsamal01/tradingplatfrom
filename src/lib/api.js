@@ -1,13 +1,17 @@
 // Where the API lives in production.
 //
-// Vite inlines VITE_API_URL at *build* time, so it has to be present in the
-// build environment - setting it at runtime is too late. That also means a
-// value set only on the hosting service never reaches the browser, which is
-// how "/api returned index.html instead of JSON" happens.
+// Vite inlines VITE_API_URL at *build* time, so the value must be present in
+// the build environment; it cannot be introduced at runtime. The frontend
+// service sets it, and the hosting provider injects service variables into the
+// build, so in production that value wins and the mapping below is not used.
 //
-// Split deployment (frontend and backend are separate services): the SPA is
-// served from its own domain and must call the backend's public origin, so the
-// mapping is explicit here. Override with VITE_API_URL when available.
+// This resolver is the safety net for when it is missing or mis-set. The
+// failure mode it prevents: if the base resolves to the SPA's own origin, every
+// /api/* request is answered by the SPA with index.html instead of JSON, and
+// the UI reports the backend as unreachable even though the API is healthy.
+//
+// Split deployment (frontend and backend are separate services): the SPA must
+// call the backend's public origin, so the mapping is explicit here.
 //
 // Single-service deployment (the backend serves the built dist folder): the
 // hostname matches nothing below and falls through to same-origin, which is
