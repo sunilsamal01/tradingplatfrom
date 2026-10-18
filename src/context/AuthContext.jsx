@@ -1,6 +1,6 @@
 import { createContext, useCallback, useEffect, useMemo, useState } from "react";
 import { api, setAccessToken, clearAccessToken, isBackendUp } from "../lib/api.js";
-import { firebaseConfigured, firebaseEmailLogin, firebaseGoogleLogin, firebaseSendLoginLink, firebaseCompleteLoginLink } from "../lib/firebaseClient.js";
+import { firebaseConfigured, firebaseGoogleLogin, firebaseSendLoginLink, firebaseCompleteLoginLink } from "../lib/firebaseClient.js";
 
 export const AuthContext = createContext(null);
 const mockUser = (email, extra = {}) => ({ id: "demo-1", name: extra.name || "Demo Trader", email: email || "demo@desk.com", role: "user", plan: "FREE", emailVerified: false, ...extra });
@@ -50,21 +50,10 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     try {
-      // Firebase owns the consumer password check when configured. If it fails
-      // (e.g. staff accounts that only exist backend-side), fall back to the
-      // backend's local password login before giving up.
-      let idToken = null;
-      if (firebaseConfigured) {
-        try { idToken = await firebaseEmailLogin(email, password); }
-        catch {
-          const d = await api.post("/auth/login", { email, password });
-          if (d?.accessToken || d?.token) setAccessToken(d.accessToken || d.token);
-          if (d?.user) setUser(d.user);
-          localStorage.removeItem("slt_demo_user");
-          return { ok: true, user: d?.user || null };
-        }
-      }
-      const d = await api.post("/auth/login", idToken ? { idToken } : { email, password });
+      // Email + password only. The backend compares the password against the
+      // stored bcrypt hash - no OTP and no Firebase round-trip - so a correct
+      // pair is all that is needed to sign in.
+      const d = await api.post("/auth/login", { email, password });
       if (d?.accessToken || d?.token) setAccessToken(d.accessToken || d.token);
       if (d?.user) setUser(d.user);
       localStorage.removeItem("slt_demo_user");
@@ -78,11 +67,13 @@ export function AuthProvider({ children }) {
       const parts = String(name || "").trim().split(/\s+/);
       const firstName = parts[0] || "Trader";
       const lastName = parts.slice(1).join(" ");
-      // Backend creates the Firebase user itself, then issues a 6-digit OTP.
+      // No OTP step: the backend creates the account already active and returns
+      // a session, so the caller can go straight to the dashboard.
       const d = await api.post("/auth/register", { firstName, lastName: lastName || undefined, email, password });
       if (d?.accessToken || d?.token) setAccessToken(d.accessToken || d.token);
-      if (d?.user) { setUser(d.user); return { ok: true, user: d.user, needsOTP: !!d.needsOTP }; }
-      return { ok: true, needsOTP: true };
+      if (d?.user) setUser(d.user);
+      localStorage.removeItem("slt_demo_user");
+      return { ok: true, user: d?.user || null };
     }
     catch (e) { if (OFFLINE_DEMO && e?.status === 0) { const u = mockUser(email, { name }); persistDemo(u); return { ok: true, offline: true, user: u }; } throw e; }
   }, []);

@@ -7,7 +7,7 @@ import { ok } from '../utils/apiResponse.js';
 import { signAccess, signRefresh, setAuthCookies, clearAuthCookies, hashToken } from '../services/jwtService.js';
 import { requestOTP, verifyOTP } from '../services/otpService.js';
 import { sendOTPEmail, sendWelcome } from '../services/emailService.js';
-import { verifyIdToken, createUser as fbCreate, setEmailVerified, sendPasswordReset } from '../services/firebaseService.js';
+import { verifyIdToken, setEmailVerified, sendPasswordReset } from '../services/firebaseService.js';
 import { logActivity, logLogin } from '../services/activityService.js';
 import env from '../config/env.js';
 
@@ -25,60 +25,53 @@ async function issueSession(req, res, user) {
   await logLogin(user._id, req.ip, req.headers['user-agent'] || '', true);
   return { access, sess };
 }
+// Email/password signup, deliberately verification-free.
+//
+// No OTP is issued, so the address is NOT proven to belong to whoever registered
+// it, and the account is active the moment it is created. That trade-off was
+// chosen to keep onboarding simple: the OTP flow depended on SMTP mail, which is
+// not configured on this deployment, so verified signup could never complete.
+// To reinstate verification, issue the OTP here (requestOTP/sendOTPEmail are
+// still wired up) and set status back to 'pending'.
 export const register = asyncHandler(async (req, res) => {
   const { email, password, firstName, lastName, username } = req.body;
   const cleanEmail = String(email || '').trim().toLowerCase();
   const exists = await User.findOne({ email: cleanEmail });
-  // Allow retry when a previous attempt failed before verification:
-  // same email + still pending + no local password yet => refresh it.
+  // One account per address. Signup is verification-free now, so there is no
+  // half-finished "pending" signup to repair - an existing address is taken.
   if (exists) {
-    const hasHash = await User.findOne({ email: cleanEmail }).select('+passwordHash').then(u => !!u?.passwordHash);
-    if (exists.status !== 'pending' || hasHash) {
-      return res.status(409).json({ success: false, message: 'Email already registered. Try logging in instead.' });
-    }
-    await User.deleteOne({ _id: exists._id });
+    return res.status(409).json({ success: false, message: 'Email already registered. Try logging in instead.' });
   }
   if (username) {
     const nameTaken = await User.findOne({ username: String(username).trim() });
     if (nameTaken) return res.status(409).json({ success: false, message: 'Username already taken' });
   }
-  let firebaseUid = undefined;
-  try {
-    const fb = await fbCreate({ email: cleanEmail, password, displayName: `${firstName} ${lastName || ''}`.trim() });
-    firebaseUid = fb.uid;
-  } catch (err) {
-    // Firebase is optional — still allow local registration + OTP so signup never blocks on network-timeout.
-    const { logger } = await import('../utils/logger.js');
-    logger.warn(`Firebase createUser failed, continuing locally: ${err.message}`);
-  }
   const passwordHash = await bcrypt.hash(String(password), 10);
+  // Deliberately no Firebase account is created here. Firebase refuses to link a
+  // Google sign-in to an email that already has a password account
+  // (auth/account-exists-with-different-credential), so creating one would break
+  // the "Continue with Google" button for everyone who signed up with a password.
+  // A Firebase user is created later, on first Google sign-in, and linked by
+  // email in tokenLogin().
   const user = await User.create({
-    ...(firebaseUid ? { firebaseUid } : {}),
     email: cleanEmail, passwordHash,
     firstName: String(firstName || '').trim(), lastName: String(lastName || '').trim(),
     ...(username ? { username: String(username).trim() } : {}),
-    authProvider: 'email', status: 'pending',
+    authProvider: 'email',
+    // Active immediately - no verification step. emailVerified is set so the
+    // Account page never offers a "Resend verification" action that has no code
+    // to send.
+    status: 'active',
+    emailVerified: true,
   });
-  let otp;
-  try {
-    otp = await requestOTP(user, user.email);
-  } catch (e) {
-    // Cooldown retry: resend existing flow instead of failing signup
-    if (e.statusCode !== 429) throw e;
-  }
-  let otpPreview = undefined;
-  if (otp) {
-    try {
-      await sendOTPEmail(user.email, otp);
-    } catch (e) {
-      const { logger } = await import('../utils/logger.js');
-      logger.warn(`OTP email failed: ${e.message}`);
-    }
-    // Dev-only: surface OTP when SMTP is not configured so signup is testable.
-    if (otpPreviewEnabled()) otpPreview = otp;
-  }
-  try { await sendWelcome(user.email, firstName); } catch {}
-  return ok(res, 'Registered. Verify email with OTP.', { userId: user._id, ...(otpPreview ? { otp: otpPreview } : {}) }, 201);
+  // No OTP step: sign the new user in straight away. /auth/verify-email and
+  // /auth/resend-otp remain mounted but are no longer part of this flow.
+  try { await sendWelcome(user.email, firstName); } catch { /* email is best-effort */ }
+  const { access } = await issueSession(req, res, user);
+  return ok(res, 'Account created', {
+    user: { id: user._id, email: user.email, role: user.role, plan: user.plan, emailVerified: true },
+    accessToken: access,
+  }, 201);
 });
 export const verifyEmail = asyncHandler(async (req, res) => {
   const { email, otp } = req.body;
@@ -103,10 +96,11 @@ export const resendOtp = asyncHandler(async (req, res) => {
   return ok(res, 'OTP resent', { ...(otpPreviewEnabled() ? { otp } : {}) });
 });
 /**
- * Local password login — for staff/legacy accounts that have a `passwordHash`
- * (e.g. the seeded administrator). Firebase stays the primary consumer path;
- * this never overrides a Firebase-authenticated account because it only works
- * when a local hash exists. Failed attempts are logged to LoginHistory.
+ * Email + password login — the primary consumer path. Every account created by
+ * /auth/register stores a bcrypt hash, so signing in is a straight password
+ * comparison: no OTP, no Firebase round-trip. It only applies when a local hash
+ * exists, so Google-only accounts are unaffected. Failed attempts are logged to
+ * LoginHistory, and the response never reveals whether the address exists.
  */
 async function passwordLogin(req, res) {
   const { email, password } = req.body;
@@ -115,7 +109,7 @@ async function passwordLogin(req, res) {
   if (!user || !user.passwordHash) { if (user) await logLogin(user._id, req.ip, req.headers['user-agent'] || '', false); return genericFail(); }
   const match = await bcrypt.compare(String(password || ''), user.passwordHash);
   if (!match) { await logLogin(user._id, req.ip, req.headers['user-agent'] || '', false); return genericFail(); }
-  if (user.status !== 'active') return res.status(403).json({ success: false, message: 'Please verify your email with the OTP sent at signup before logging in', code: 'EMAIL_NOT_VERIFIED' });
+  if (user.status !== 'active') return res.status(403).json({ success: false, message: `This account is ${user.status}. Please contact support.`, code: 'ACCOUNT_INACTIVE' });
   const { access } = await issueSession(req, res, user);
   return ok(res, 'Logged in', { user: { id: user._id, email: user.email, role: user.role, plan: user.plan }, accessToken: access });
 }

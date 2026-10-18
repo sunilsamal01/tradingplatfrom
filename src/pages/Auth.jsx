@@ -8,39 +8,6 @@ import { api } from "../lib/api.js";
 
 const emailOK = (e) => /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e);
 
-function OTP({ email, onDone }) {
-  const { verifyOTP } = useAuth();
-  const [code, setCode] = useState(Array(6).fill(""));
-  const [err, setErr] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [cool, setCool] = useState(0);
-  const submit = async (e) => {
-    e.preventDefault(); setBusy(true); setErr("");
-    try { await verifyOTP(email, code.join("")); onDone(); }
-    catch (er) { setErr(er.message || "Invalid code"); }
-    finally { setBusy(false); }
-  };
-  const resend = async () => {
-    if (cool > 0) return;
-    try { await api.post("/auth/resend-otp", { email }); } catch {}
-    setCool(60);
-    const iv = setInterval(() => setCool((c) => { if (c <= 1) { clearInterval(iv); return 0; } return c - 1; }), 1000);
-  };
-  return (
-    <form onSubmit={submit} className="mt-5 flex flex-col gap-4">
-      <p className="text-xs text-white/60">Enter the 6-digit code sent to {email}</p>
-      <div className="flex gap-2" role="group" aria-label="One-time code">
-        {code.map((c, i) => (
-          <Input key={i} aria-label={`Digit ${i + 1}`} maxLength={1} inputMode="numeric" value={c}
-            onChange={(e) => { const v = e.target.value.replace(/\D/g, "").slice(0, 1); const n = [...code]; n[i] = v; setCode(n); if (v && e.target.nextElementSibling === null) {} }} className="text-center" />
-        ))}
-      </div>
-      {err && <p className="text-xs text-red-400" role="alert">{err}</p>}
-      <Button className="w-full" loading={busy}>{busy ? <><ButtonLoader /> Verifying…</> : "Verify"}</Button>
-      <button type="button" onClick={resend} disabled={cool > 0} className="text-xs text-blue-400 disabled:opacity-50">{cool > 0 ? `Resend in ${cool}s` : "Resend code"}</button>
-    </form>
-  );
-}
 
 export function Login() {
   const nav = useNavigate();
@@ -110,19 +77,19 @@ export function Register() {
   const nav = useNavigate();
   const { register, googleSuccess } = useAuth();
   const [name, setName] = useState(""); const [email, setEmail] = useState(""); const [pw, setPw] = useState("");
-  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false); const [otp, setOtp] = useState(false);
+  const [err, setErr] = useState(""); const [busy, setBusy] = useState(false);
   const bad = !name || !email || !emailOK(email) || pw.length < 6;
   const submit = async (e) => {
     e.preventDefault();
     if (bad) { setErr("Please fix the highlighted fields."); return; }
     setBusy(true); setErr("");
-    try { const r = await register(name, email, pw); if (r?.needsOTP) setOtp(true); else nav("/dashboard"); }
+    // No OTP step: the backend activates the account and returns a session.
+    try { await register(name, email, pw); nav("/dashboard"); }
     catch (er) { setErr(er.message || "Registration failed"); }
     finally { setBusy(false); }
   };
   return <Section><Container><Card className="mx-auto max-w-md bg-white/[0.02] backdrop-blur-xl">
     <h1 className="text-xl font-semibold">Create your account</h1>
-    {otp ? <OTP email={email} onDone={() => nav("/dashboard")} /> : (
     <form className="mt-5 flex flex-col gap-4" onSubmit={submit}>
       <FormField label="Name"><Input aria-label="Name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Jane Trader" /></FormField>
       <FormField label="Email"><Input aria-label="Email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="you@desk.com" /></FormField>
@@ -131,7 +98,7 @@ export function Register() {
       <Button className="w-full" loading={busy}>{busy ? <><ButtonLoader /> Creating…</> : "Create account"}</Button>
       <Button variant="secondary" className="w-full" type="button" onClick={async () => { try { await googleSuccess({ email, name }); nav("/dashboard"); } catch (er) { setErr(er.message); } }}>Continue with Google</Button>
       <p className="text-center text-xs text-white/50"><Link to="/login" className="text-blue-400">Have an account? Log in</Link></p>
-    </form>)}
+    </form>
   </Card></Container></Section>;
 }
 
