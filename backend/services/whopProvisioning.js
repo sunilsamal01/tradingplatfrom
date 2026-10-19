@@ -53,6 +53,13 @@ export function variantMismatch(plan, variant) {
   if (variant?.plan_type && variant.plan_type !== 'renewal') {
     return `it bills as ${variant.plan_type}, not a recurring renewal`;
   }
+  // Whop charges `initial_price` PLUS the first `renewal_price` at checkout, so a
+  // positive initial_price double-bills day one: the buyer pays more than the
+  // price we display. It is a signup fee, not the first period.
+  const signup = Number(variant?.initial_price);
+  if (Number.isFinite(signup) && signup > 0) {
+    return `it adds a one-time signup fee of ${variant.initial_price} ${variant?.currency || '?'} on top of the first period`;
+  }
   return null;
 }
 
@@ -65,7 +72,12 @@ export function variantPayload(plan, { accountId, productId }) {
     title: String(plan.name).slice(0, 30), // Whop caps variant titles at 30 chars
     plan_type: 'renewal',
     billing_period: (plan.interval === 'year' ? 365 : 30) * (plan.intervalCount || 1),
-    initial_price: price,
+    // Whop charges `initial_price` PLUS the first `renewal_price` at checkout for
+    // a recurring variant, and `initial_price` is a one-time signup fee, not the
+    // first period. Setting it to the plan price therefore bills two periods on
+    // day one — a $20/month plan took $40 (then tax on top). 0 means no signup
+    // fee, so the buyer pays exactly one period, matching the price we display.
+    initial_price: 0,
     renewal_price: price,
     // The API expects ISO 4217 lowercase ("usd"), not the uppercase form we
     // store on the plan.

@@ -97,8 +97,11 @@ test('the variant payload matches the plan it sells', async () => {
 
   assert.equal(payload.plan_type, 'renewal', 'subscriptions, not one-off charges');
   assert.equal(payload.billing_period, 30, 'a monthly plan bills every 30 days');
-  assert.equal(payload.initial_price, 50, 'the first charge is the plan price');
-  assert.equal(payload.renewal_price, 50, 'and so is every renewal');
+  // Whop charges initial_price PLUS the first renewal at checkout, and
+  // initial_price is a one-time signup fee. Setting it to the plan price made a
+  // $20/month plan take $40 on day one, which is the bug this pins.
+  assert.equal(payload.initial_price, 0, 'no signup fee — the buyer pays one period');
+  assert.equal(payload.renewal_price, 50, 'and then the plan price every period');
   // The API rejects the uppercase form; the response comes back lowercase.
   assert.equal(payload.currency, 'usd');
   assert.equal(payload.product_id, null, 'no product exists yet in a dry run');
@@ -240,7 +243,7 @@ test('an existing product is reused even when its title differs only in case', a
 test('an existing variant at the right price is reused', async () => {
   const client = makeClient({
     products: [{ id: 'prod_1', title: TITLE }],
-    variants: [{ id: 'plan_starter', title: 'Starter', product_id: 'prod_1', initial_price: 20, currency: 'USD' }],
+    variants: [{ id: 'plan_starter', title: 'Starter', product_id: 'prod_1', initial_price: 0, renewal_price: 20, currency: 'USD' }],
   });
   const r = await run(client, true, [plan()]);
 
@@ -254,7 +257,7 @@ test('an existing variant whose price disagrees with the plan is never linked', 
   // refused and reported instead.
   const client = makeClient({
     products: [{ id: 'prod_1', title: TITLE }],
-    variants: [{ id: 'plan_starter', title: 'Starter', product_id: 'prod_1', initial_price: 5, currency: 'USD' }],
+    variants: [{ id: 'plan_starter', title: 'Starter', product_id: 'prod_1', initial_price: 0, renewal_price: 5, currency: 'USD' }],
   });
   const r = await run(client, true, [plan()]);
 
@@ -268,7 +271,7 @@ test('an existing variant whose price disagrees with the plan is never linked', 
 test('a variant title that differs only in case is still matched', async () => {
   const client = makeClient({
     products: [{ id: 'prod_1', title: TITLE }],
-    variants: [{ id: 'plan_pro', title: 'PRO', product_id: 'prod_1', initial_price: 50, currency: 'USD' }],
+    variants: [{ id: 'plan_pro', title: 'PRO', product_id: 'prod_1', initial_price: 0, renewal_price: 50, currency: 'USD' }],
   });
   const r = await run(client, true, [plan({ name: 'Pro', slug: 'pro', priceCents: 5000 })]);
 
@@ -278,7 +281,7 @@ test('a variant title that differs only in case is still matched', async () => {
 
 test('variantMismatch refuses a variant that cannot faithfully sell a plan', () => {
   const p = plan(); // Starter, 2000 cents, USD, monthly
-  const good = { renewal_price: 20, initial_price: 20, currency: 'usd', plan_type: 'renewal' };
+  const good = { renewal_price: 20, initial_price: 0, currency: 'usd', plan_type: 'renewal' };
 
   assert.equal(variantMismatch(p, good), null, 'an exact match is linkable');
 
@@ -287,6 +290,11 @@ test('variantMismatch refuses a variant that cannot faithfully sell a plan', () 
   assert.match(variantMismatch(p, { ...good, plan_type: 'one_time' }), /not a recurring renewal/);
   // A one-off variant at the right price still cannot sell a subscription.
   assert.match(variantMismatch(p, { ...good, plan_type: 'one_time' }), /one_time/);
+
+  // The exact bug that shipped: initial_price is a one-time signup fee charged
+  // ON TOP of the first period, so a $20 plan with initial_price 20 took $40.
+  assert.match(variantMismatch(p, { ...good, initial_price: 20 }), /signup fee/);
+  assert.match(variantMismatch(p, { ...good, initial_price: 20 }), /on top of the first period/);
 
   // Unknown information must not be treated as a mismatch: refusing on data we
   // were not given would block linking for no reason.
