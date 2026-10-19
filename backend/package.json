@@ -13,6 +13,7 @@
     "seed:admin": "node scripts/seedAdmin.js",
     "seed:plans": "node scripts/seedPlans.js",
     "whop:provision": "node scripts/whopProvision.js",
+    "whop:link": "node scripts/whopLink.js",
     "indexes": "node scripts/ensureIndexes.js"
   },
   "dependencies": {

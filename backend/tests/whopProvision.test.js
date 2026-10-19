@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { provisionWhop, variantPayload, collect } from '../services/whopProvisioning.js';
+import { provisionWhop, variantPayload, variantMismatch, collect } from '../services/whopProvisioning.js';
 
 // ---------------------------------------------------------------------------
 // Provisioning is the one part of the Whop integration that WRITES to the
@@ -261,7 +261,7 @@ test('an existing variant whose price disagrees with the plan is never linked', 
   assert.equal(r.variants[0].action, 'mismatch');
   assert.equal(r.variantIdBySlug.size, 0, 'a wrong-priced variant must never be linked');
   assert.equal(r.errors.length, 1);
-  assert.match(r.errors[0].step, /price/);
+  assert.match(r.errors[0].step, /variant/);
   assert.deepEqual(client.writes.variants, [], 'a mismatched variant is not replaced either');
 });
 
@@ -274,6 +274,24 @@ test('a variant title that differs only in case is still matched', async () => {
 
   assert.equal(r.variantIdBySlug.get('pro'), 'plan_pro');
   assert.deepEqual(client.writes.variants, []);
+});
+
+test('variantMismatch refuses a variant that cannot faithfully sell a plan', () => {
+  const p = plan(); // Starter, 2000 cents, USD, monthly
+  const good = { renewal_price: 20, initial_price: 20, currency: 'usd', plan_type: 'renewal' };
+
+  assert.equal(variantMismatch(p, good), null, 'an exact match is linkable');
+
+  assert.match(variantMismatch(p, { ...good, renewal_price: 5 }), /costs 5/);
+  assert.match(variantMismatch(p, { ...good, currency: 'inr' }), /priced in INR/);
+  assert.match(variantMismatch(p, { ...good, plan_type: 'one_time' }), /not a recurring renewal/);
+  // A one-off variant at the right price still cannot sell a subscription.
+  assert.match(variantMismatch(p, { ...good, plan_type: 'one_time' }), /one_time/);
+
+  // Unknown information must not be treated as a mismatch: refusing on data we
+  // were not given would block linking for no reason.
+  assert.equal(variantMismatch(p, { currency: 'usd', plan_type: 'renewal' }), null);
+  assert.equal(variantMismatch(p, {}), null);
 });
 
 test('collect() drains a Whop page, a promise of one, and a plain array', async () => {

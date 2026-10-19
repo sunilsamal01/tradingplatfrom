@@ -31,6 +31,31 @@ export async function collect(source) {
  */
 const normalize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
 
+/**
+ * Why a Whop variant cannot faithfully sell a plan, or null when it can.
+ *
+ * Settlement rejects an order whose amount or currency disagrees with the plan,
+ * so linking a variant that does not match turns every purchase into a parked
+ * order. An unknown price is not treated as a mismatch — we do not refuse on
+ * information we simply were not given.
+ */
+export function variantMismatch(plan, variant) {
+  const actual = variant?.renewal_price ?? variant?.initial_price ?? null;
+  const expected = plan.priceCents / 100;
+  if (actual !== null && actual !== undefined && Number(actual) !== expected) {
+    return `it costs ${actual} ${variant?.currency || '?'} against the plan's ${expected} ${plan.currency || 'USD'}`;
+  }
+  const gotCurrency = variant?.currency ? String(variant.currency).toUpperCase() : null;
+  const wantCurrency = String(plan.currency || 'USD').toUpperCase();
+  if (gotCurrency && gotCurrency !== wantCurrency) {
+    return `it is priced in ${gotCurrency} against the plan's ${wantCurrency}`;
+  }
+  if (variant?.plan_type && variant.plan_type !== 'renewal') {
+    return `it bills as ${variant.plan_type}, not a recurring renewal`;
+  }
+  return null;
+}
+
 /** The create payload for one plan's recurring variant. */
 export function variantPayload(plan, { accountId, productId }) {
   const price = plan.priceCents / 100;
@@ -127,17 +152,15 @@ export async function provisionWhop({
         try { row = await client.variants.retrieve({ id: match.id }); }
         catch { /* fall back to whatever the list gave us */ }
       }
-      const actual = row?.initial_price ?? row?.renewal_price ?? null;
-      const expected = plan.priceCents / 100;
-      if (actual !== null && Number(actual) !== expected) {
-        const detail = `${actual} ${row?.currency || '?'} against the plan's ${expected} ${plan.currency}`;
-        variants.push({ slug: plan.slug, title, id: match.id, action: 'mismatch', reason: detail, price: Number(actual) });
-        log(`  ✖ ${plan.slug}: existing variant "${title}" costs ${detail} — NOT linked`);
-        errors.push({ step: `variant price for ${plan.slug}`, message: `existing variant ${match.id} costs ${detail}` });
+      const mismatch = variantMismatch(plan, row);
+      if (mismatch) {
+        variants.push({ slug: plan.slug, title, id: match.id, action: 'mismatch', reason: mismatch });
+        log(`  ✖ ${plan.slug}: existing variant "${title}" cannot sell this plan — ${mismatch}. NOT linked`);
+        errors.push({ step: `variant for ${plan.slug}`, message: `existing variant ${match.id}: ${mismatch}` });
         continue;
       }
       variants.push({ slug: plan.slug, title, id: match.id, action: 'found' });
-      done('reuse', `${plan.slug}: found existing variant "${title}" (${actual ?? '?'} ${row?.currency || plan.currency}) → ${match.id}`);
+      done('reuse', `${plan.slug}: found existing variant "${title}" (${row?.renewal_price ?? row?.initial_price ?? '?'} ${row?.currency || plan.currency}) → ${match.id}`);
       continue;
     }
     if (!(plan.priceCents > 0)) {
