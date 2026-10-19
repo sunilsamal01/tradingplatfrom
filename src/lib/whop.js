@@ -70,11 +70,17 @@ export async function mountWhopCheckout({ planId, metadata, returnUrl, container
     },
   });
 
-  // Documented usage is `checkout.create(id).mount(selector)`, and the target
-  // element has to exist before mount() runs — so the markup goes in first.
+  // `create()` takes the ELEMENT NAME, not a container. Whop's own example is
+  //   checkout.create("checkout").mount("#checkout")
+  // and "checkout" is the registry key of the bundle Whop's CDN serves. Passing
+  // a container id here makes the element request a bundle that does not exist:
+  // the frame 404s, never sizes, and the buyer sees an empty box where the card
+  // form should be. The container id belongs on mount(), not on create().
+  //
+  // The target element must already be in the DOM before mount() runs.
   const mountId = `whop-checkout-${Math.random().toString(36).slice(2, 8)}`;
   container.innerHTML = `<div id="${mountId}"></div>`;
-  const element = checkout.create(mountId);
+  const element = checkout.create("checkout");
   // Documented builds return the element from create(); fall back to the handle
   // if a build exposes mount() only there, rather than throwing at the user.
   const target = element && typeof element.mount === "function" ? element : checkout;
