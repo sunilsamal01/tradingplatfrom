@@ -8,6 +8,7 @@ import AuditLog from '../models/AuditLog.js';
 import { resolvePurchasablePlan } from './planService.js';
 import { coinDetail } from './marketService.js';
 import { generateOrderId } from '../utils/generateId.js';
+import { logger } from '../utils/logger.js';
 
 // ---------------------------------------------------------------------------
 // Unified checkout service.
@@ -531,13 +532,35 @@ export async function fulfilOrder(order) {
     const sub = await activateSubscription(order.userId, order.planSlug, order.paymentId || null, days);
     order.subscriptionId = sub._id;
     await order.save();
-    await User.findByIdAndUpdate(order.userId, {
+    const buyer = await User.findByIdAndUpdate(order.userId, {
       plan: order.planSlug,
       currentSubscription: sub._id,
       subscriptionStatus: 'active',
       subscriptionExpiresAt: sub.expiresAt,
-    });
-    return { kind: 'subscription', subscriptionId: String(sub._id) };
+    }, { new: true });
+
+    // Receipt. This runs inside the settlement path, which is idempotent, so a
+    // buyer gets exactly one receipt per order. Best-effort on purpose: a mail
+    // outage must never roll back a payment we have already taken.
+    try {
+      const { sendSubscriptionReceipt } = await import('./emailService.js');
+      if (buyer?.email) {
+        await sendSubscriptionReceipt(buyer.email, {
+          name: buyer.firstName || buyer.username || 'Hunter',
+          planName: order.planName || order.planSlug,
+          amount: (order.totalCents / 100).toFixed(2),
+          currency: order.currency,
+          reference: order.reference,
+          provider: order.provider,
+          interval: order.interval,
+          intervalCount: order.intervalCount || 1,
+          renewsOn: sub.expiresAt,
+        });
+      }
+    } catch (e) {
+      logger.warn(`Receipt email failed for ${order.reference}: ${e?.message || 'error'}`);
+    }
+    return { kind: 'subscription', subscriptionId: String(sub._id), receiptSentTo: buyer?.email || null };
   }
 
   // Crypto: only ever the SIMULATED path (the provider path is refused above).

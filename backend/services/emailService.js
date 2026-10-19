@@ -23,5 +23,55 @@ export const sendWelcome = (to, name) => sendEmail(to, `Welcome to ${BRAND.name}
 export const sendOTPEmail = (to, otp) => sendEmail(to, `${otp} — your ${BRAND.name} verification code`, wrap('Verify your email', `Your code is ${otp}. Valid for 10 minutes.`, `<p>Use this code to complete your registration:</p><div style="font-size:36px;font-weight:800;letter-spacing:10px;text-align:center;background:#f4f1fa;border:2px dashed ${BRAND.accent};border-radius:12px;padding:16px;margin:16px 0">${otp}</div><p style="color:${BRAND.muted};font-size:13px">Valid for 10 minutes. Never share this code — our team will never ask for it.</p>`), { text: `Your ${BRAND.name} verification code is ${otp}. Valid for 10 minutes.` });
 export const sendResetEmail = (to, link) => sendEmail(to, `Reset your ${BRAND.name} password`, wrap('Reset your password', 'Someone requested a password reset.', `<p>Click below to set a new password. Link expires in 1 hour.</p><a href="${link}" style="display:inline-block;background:${BRAND.accent};color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700">Reset Password</a><p style="color:${BRAND.muted};font-size:13px">Didn't request this? Ignore this email.</p>`));
 export const sendPaymentEmail = (to, orderId, amount, currency = 'INR') => { const sym = currency === 'USD' ? '$' : '₹'; return sendEmail(to, `Payment receipt — Order ${orderId}`, wrap('Payment received ✓', `Order ${orderId} confirmed.`, `<p>Amount received: <b>${sym}${amount}</b></p><p>Order ID: <b>${orderId}</b></p><p>Thank you for powering up with ${BRAND.name}.</p>`)); };
-export const sendSubscriptionEmail = (to, plan) => sendEmail(to, `Your ${plan} plan is active ⚔️`, wrap('Subscription active', `Plan ${plan} activated.`, `<p>Your <b>${plan}</b> plan is now active. Enjoy premium signals and analytics.</p><a href="${BRAND.url}/billing" style="display:inline-block;background:${BRAND.accent};color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700">Manage Subscription</a>`));
+export const sendSubscriptionEmail = (to, plan) => sendEmail(to, `Your ${plan} plan is active ⚔️`, wrap('Subscription active', `Plan ${plan} activated.`, `<p>Your <b>${plan}</b> plan is now active. Enjoy premium signals and analytics.</p><a href="${BRAND.url}/subscription" style="display:inline-block;background:${BRAND.accent};color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700">Manage Subscription</a>`));
 export const sendSecurityEmail = (to, msg) => sendEmail(to, `Security alert — ${BRAND.name}`, wrap('Security alert', 'Unusual activity on your account.', `<p>${msg}</p><p style="color:${BRAND.muted};font-size:13px">If this wasn't you, reset your password immediately.</p>`));
+
+// Anything interpolated into the receipt may originate from the database (plan
+// names are admin-authored), so escape it rather than trusting it in HTML.
+const esc = (v) => String(v ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const PROVIDER_LABELS = { whop: 'Whop', stripe: 'Stripe', razorpay: 'Razorpay' };
+// An unrecognised or absent provider (e.g. a simulated order) is described as
+// the card it ultimately was, never rendered as a raw "none".
+const methodLabel = (p) => PROVIDER_LABELS[p] || (p && p !== 'none' ? String(p) : 'Card');
+
+/**
+ * Purchase receipt for a subscription that has actually been paid for.
+ *
+ * `buildSubscriptionReceipt` is pure so the rendering — including the escaping
+ * of DB-authored values — can be tested without a mail server. Sent from the
+ * settlement path, which is idempotent, so a buyer receives this exactly once.
+ */
+export function buildSubscriptionReceipt(r = {}) {
+  const sym = r.currency === 'USD' ? '$' : r.currency === 'INR' ? '₹' : `${r.currency || ''} `;
+  const renews = r.renewsOn ? new Date(r.renewsOn) : null;
+  const hasRenews = !!renews && !Number.isNaN(renews.getTime());
+  const cadence = r.interval === 'year' ? 'year' : 'month';
+  const every = Number(r.intervalCount) > 1 ? `Every ${r.intervalCount} ${cadence}s` : `Every ${cadence}`;
+  const rows = [
+    ['Plan', esc(r.planName || 'Subscription')],
+    ['Amount paid', `${sym}${esc(r.amount)}`],
+    ['Order reference', esc(r.reference)],
+    ['Payment method', esc(methodLabel(r.provider))],
+    ['Billing', every],
+  ];
+  if (hasRenews) {
+    rows.push(['Next renewal', renews.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })]);
+  }
+  const table = `<table style="width:100%;border-collapse:collapse;margin:16px 0">${rows
+    .map(([k, v]) => `<tr><td style="padding:8px 0;border-bottom:1px solid #eee;color:${BRAND.muted};font-size:13px">${k}</td><td style="padding:8px 0;border-bottom:1px solid #eee;text-align:right;font-weight:600;color:${BRAND.dark}">${v}</td></tr>`)
+    .join('')}</table>`;
+  const body = `<p>Hi ${esc(r.name || 'Hunter')}, your <b>${esc(r.planName || 'subscription')}</b> plan is active. Here is your receipt.</p>${table}<a href="${BRAND.url}/subscription" style="display:inline-block;background:${BRAND.accent};color:#fff;padding:12px 28px;border-radius:10px;text-decoration:none;font-weight:700">View your subscription →</a><p style="color:${BRAND.muted};font-size:13px">Keep this email as your payment receipt. Questions? Just reply to this message.</p>`;
+  return {
+    // Subject is a header, not HTML: strip CR/LF so a plan name can never
+    // inject a header, and escape everywhere the value lands in markup.
+    subject: `Receipt — ${String(r.planName || 'subscription').replace(/[\r\n]+/g, ' ')} plan activated ⚔️`,
+    html: wrap('Payment received — your plan is live', `Receipt for ${esc(r.planName || 'your subscription')}.`, body),
+    text: `${BRAND.name} receipt\nPlan: ${r.planName || 'Subscription'}\nAmount paid: ${sym}${r.amount}\nOrder reference: ${r.reference}\nPayment method: ${methodLabel(r.provider)}${hasRenews ? `\nNext renewal: ${renews.toISOString().slice(0, 10)}` : ''}`,
+  };
+}
+
+export function sendSubscriptionReceipt(to, r = {}) {
+  const { subject, html, text } = buildSubscriptionReceipt(r);
+  return sendEmail(to, subject, html, { text });
+}

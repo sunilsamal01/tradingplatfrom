@@ -1,5 +1,6 @@
 import Payment from '../models/Payment.js';
 import Purchase from '../models/Purchase.js';
+import CheckoutOrder from '../models/CheckoutOrder.js';
 import Subscription from '../models/Subscription.js';
 import Usage from '../models/Usage.js';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -116,7 +117,24 @@ export const billing = asyncHandler(async (req, res) => {
     Payment.countDocuments({ userId: req.user.sub }),
     Purchase.find({ userId: req.user.sub }).sort({ createdAt: -1 }).skip(skip).limit(limit).lean(),
   ]);
+  // Orders raised by the unified checkout have no Purchase row, so resolve the
+  // human-readable reference (the one the receipt quotes) from the order itself.
+  const orderIds = payments.map((p) => p.checkoutOrderId).filter(Boolean);
+  const checkoutOrders = orderIds.length
+    ? await CheckoutOrder.find({ _id: { $in: orderIds } }).select('reference').lean()
+    : [];
   // Only payment metadata is exposed — no provider secrets or raw signatures.
-  const items = payments.map((p) => ({ id: p._id, plan: p.plan, amount: p.amount, currency: p.currency || 'INR', provider: p.provider, status: p.status, createdAt: p.createdAt, purchaseRef: purchases.find((q) => String(q.paymentId) === String(p._id))?.orderId || null }));
+  const items = payments.map((p) => ({
+    id: p._id,
+    plan: p.plan,
+    amount: p.amount,
+    currency: p.currency || 'INR',
+    provider: p.provider,
+    status: p.status,
+    createdAt: p.createdAt,
+    purchaseRef: checkoutOrders.find((o) => String(o._id) === String(p.checkoutOrderId))?.reference
+      || purchases.find((q) => String(q.paymentId) === String(p._id))?.orderId
+      || null,
+  }));
   return ok(res, 'OK', { items, page, limit, total });
 });

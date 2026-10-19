@@ -27,6 +27,12 @@ process.env.JWT_ACCESS_SECRET = 'test_access_secret_for_quote_signing';
 process.env.CHECKOUT_TAX_BPS = '0';
 // Wallet top-ups stay off: the subscription path must work with them disabled.
 process.env.WALLET_DEPOSITS_ENABLED = 'false';
+// Mail is force-disabled for this suite: the local .env holds REAL SMTP
+// credentials, and a test must never send mail. Empty (not deleted) values,
+// because dotenv.config() would repopulate anything absent from the file.
+process.env.SMTP_HOST = '';
+process.env.SMTP_USER = '';
+process.env.SMTP_PASS = '';
 
 // `skip` is consumed by every test's options: if the in-memory database cannot
 // be started the whole file reports SKIPPED, never a false pass.
@@ -382,6 +388,83 @@ test('a late failure never downgrades a refunded order', { skip }, async () => {
 
   const fresh = await CheckoutOrder.findById(order._id);
   assert.equal(fresh.status, 'refunded');
+});
+
+// ---------------------------------------------------------------------------
+// 3b. Receipt email + billing history
+// ---------------------------------------------------------------------------
+
+test('settlement emails one receipt to the buyer (Whop path)', { skip }, async () => {
+  const plan = await makePlan({ slug: `receipt_${tag()}`, priceCents: 5000 });
+  const user = await makeUser();
+  const order = await placeOrder(user._id, plan.slug);
+  await startSession(user._id, order._id);
+
+  const r = await checkout.settleWhopCheckoutOrder({
+    reference: order.reference, providerPaymentId: `pay_test_rcpt_${order.reference}`, providerAmount: 50, providerCurrency: 'USD',
+  });
+
+  assert.equal(r.alreadyPaid, false);
+  // The receipt is addressed to the buyer's real address, and a second
+  // settlement cannot send a second one.
+  assert.equal(r.fulfilment.receiptSentTo, user.email);
+  const again = await checkout.settleWhopCheckoutOrder({
+    reference: order.reference, providerPaymentId: `pay_test_rcpt_${order.reference}`, providerAmount: 50, providerCurrency: 'USD',
+  });
+  assert.equal(again.alreadyPaid, true);
+  assert.equal(again.fulfilment, undefined, 'an already-paid order must not re-fulfil or re-email');
+});
+
+test('the receipt renders and degrades gracefully when mail is unconfigured', { skip }, async () => {
+  const { buildSubscriptionReceipt, sendSubscriptionReceipt } = await import('../services/emailService.js');
+
+  // Content is asserted on the pure builder, so no mail is ever sent.
+  const { subject, html, text } = buildSubscriptionReceipt({
+    name: 'Buyer', planName: 'Pro', amount: '50.00', currency: 'USD', reference: 'SLT-TEST-1',
+    provider: 'whop', interval: 'month', intervalCount: 1, renewsOn: new Date('2026-12-01'),
+  });
+  assert.match(subject, /Pro/);
+  assert.match(html, /\$50\.00/);
+  assert.match(html, /SLT-TEST-1/);
+  assert.match(html, /Whop/, 'the receipt names the method the buyer actually used');
+  assert.match(html, /\/subscription/, 'links to a route that exists');
+  assert.match(text, /SLT-TEST-1/);
+
+  // A DB-authored plan name containing markup must be escaped, not injected.
+  const risky = buildSubscriptionReceipt({ planName: '<img src=x onerror=alert(1)>', amount: '1.00', currency: 'USD' });
+  assert.ok(!risky.html.includes('<img'), 'plan names are escaped before interpolation');
+
+  // Every field optional — a bare receipt still renders without throwing.
+  assert.match(buildSubscriptionReceipt({}).subject, /Receipt/);
+
+  // And with SMTP unconfigured the send degrades to logging, never throwing.
+  const out = await sendSubscriptionReceipt('buyer@example.test', { planName: 'Pro', amount: '50.00', currency: 'USD' });
+  assert.equal(out?.queued, false);
+  assert.equal(out?.logged, true);
+});
+
+test('the billing history shows the paid Whop order with its reference', { skip }, async () => {
+  const plan = await makePlan({ slug: `history_${tag()}`, priceCents: 10000 });
+  const user = await makeUser();
+  const order = await placeOrder(user._id, plan.slug);
+  await startSession(user._id, order._id);
+  await checkout.settleWhopCheckoutOrder({
+    reference: order.reference, providerPaymentId: `pay_test_hist_${order.reference}`, providerAmount: 100, providerCurrency: 'USD',
+  });
+
+  // Exercise the real controller the profile page calls.
+  const { billing } = await import('../controllers/subscriptionController.js');
+  const { res, out } = makeRes();
+  await billing({ user: { sub: String(user._id) }, query: {} }, res);
+
+  const items = out.body?.data?.items || [];
+  assert.equal(items.length, 1);
+  assert.equal(items[0].provider, 'whop');
+  assert.equal(items[0].status, 'paid');
+  assert.equal(items[0].amount, 100);
+  assert.equal(items[0].currency, 'USD');
+  // The reference the receipt quotes is what the table shows.
+  assert.equal(items[0].purchaseRef, order.reference);
 });
 
 // ---------------------------------------------------------------------------
