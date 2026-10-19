@@ -44,6 +44,11 @@ function makeClient({ products = [], variants = [], webhooks = [], failWebhook =
     },
     variants: {
       async list({ product_ids }) { return variants.filter((v) => v.product_id === product_ids?.[0]); },
+      async retrieve({ id }) {
+        const v = variants.find((x) => x.id === id);
+        if (!v) throw new Error('variant not found');
+        return v;
+      },
       async create(p) {
         writes.variants.push(p);
         if (!p.product_id) throw new Error('product_id is required');
@@ -94,7 +99,8 @@ test('the variant payload matches the plan it sells', async () => {
   assert.equal(payload.billing_period, 30, 'a monthly plan bills every 30 days');
   assert.equal(payload.initial_price, 50, 'the first charge is the plan price');
   assert.equal(payload.renewal_price, 50, 'and so is every renewal');
-  assert.equal(payload.currency, 'USD');
+  // The API rejects the uppercase form; the response comes back lowercase.
+  assert.equal(payload.currency, 'usd');
   assert.equal(payload.product_id, null, 'no product exists yet in a dry run');
   assert.equal(payload.metadata.plan_slug, 'pro', 'so a payment can be traced back to its plan');
   assert.equal(payload.visibility, 'visible');
@@ -218,6 +224,56 @@ test('a variant list failure blocks variant creation', async () => {
   assert.deepEqual(client.writes.variants, [], 'never create a variant we could not match against');
   assert.equal(r.variants.every((v) => v.action === 'blocked'), true);
   assert.equal(r.variantIdBySlug.size, 0, 'nothing was created, so nothing may be linked');
+});
+
+test('an existing product is reused even when its title differs only in case', async () => {
+  // The live account carries "Sololevelingtrad"; an exact match against
+  // "SoloLevelingTrad" would have created a duplicate product.
+  const client = makeClient({ products: [{ id: 'prod_existing', title: 'Sololevelingtrad' }] });
+  const r = await run(client, true);
+
+  assert.equal(r.product.action, 'reuse');
+  assert.equal(r.product.id, 'prod_existing');
+  assert.deepEqual(client.writes.products, [], 'the existing product is adopted, not duplicated');
+});
+
+test('an existing variant at the right price is reused', async () => {
+  const client = makeClient({
+    products: [{ id: 'prod_1', title: TITLE }],
+    variants: [{ id: 'plan_starter', title: 'Starter', product_id: 'prod_1', initial_price: 20, currency: 'USD' }],
+  });
+  const r = await run(client, true, [plan()]);
+
+  assert.equal(r.variantIdBySlug.get('starter'), 'plan_starter');
+  assert.deepEqual(client.writes.variants, []);
+  assert.deepEqual(r.errors, []);
+});
+
+test('an existing variant whose price disagrees with the plan is never linked', async () => {
+  // Linking this would make every purchase park for review, so it must be
+  // refused and reported instead.
+  const client = makeClient({
+    products: [{ id: 'prod_1', title: TITLE }],
+    variants: [{ id: 'plan_starter', title: 'Starter', product_id: 'prod_1', initial_price: 5, currency: 'USD' }],
+  });
+  const r = await run(client, true, [plan()]);
+
+  assert.equal(r.variants[0].action, 'mismatch');
+  assert.equal(r.variantIdBySlug.size, 0, 'a wrong-priced variant must never be linked');
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0].step, /price/);
+  assert.deepEqual(client.writes.variants, [], 'a mismatched variant is not replaced either');
+});
+
+test('a variant title that differs only in case is still matched', async () => {
+  const client = makeClient({
+    products: [{ id: 'prod_1', title: TITLE }],
+    variants: [{ id: 'plan_pro', title: 'PRO', product_id: 'prod_1', initial_price: 50, currency: 'USD' }],
+  });
+  const r = await run(client, true, [plan({ name: 'Pro', slug: 'pro', priceCents: 5000 })]);
+
+  assert.equal(r.variantIdBySlug.get('pro'), 'plan_pro');
+  assert.deepEqual(client.writes.variants, []);
 });
 
 test('collect() drains a Whop page, a promise of one, and a plain array', async () => {

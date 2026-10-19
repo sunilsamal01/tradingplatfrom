@@ -11,8 +11,7 @@
 // plan. `apply: false` plans everything and writes nothing.
 // ---------------------------------------------------------------------------
 
-/**
- * Drain an async-iterable (a Whop Page, or an array in tests) into an array.
+/** Drain an async-iterable (a Whop Page, or an array in tests) into an array.
  * Accepts a promise too, because the SDK's list methods return one and passing
  * it un-awaited is an easy mistake to make.
  */
@@ -25,6 +24,13 @@ export async function collect(source) {
   return out;
 }
 
+/**
+ * Match titles case- and punctuation-insensitively. The account already carries
+ * a product titled "Sololevelingtrad"; an exact match against "SoloLevelingTrad"
+ * would have created a second, duplicate product.
+ */
+const normalize = (s) => String(s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
 /** The create payload for one plan's recurring variant. */
 export function variantPayload(plan, { accountId, productId }) {
   const price = plan.priceCents / 100;
@@ -36,7 +42,9 @@ export function variantPayload(plan, { accountId, productId }) {
     billing_period: (plan.interval === 'year' ? 365 : 30) * (plan.intervalCount || 1),
     initial_price: price,
     renewal_price: price,
-    currency: plan.currency || 'USD',
+    // The API expects ISO 4217 lowercase ("usd"), not the uppercase form we
+    // store on the plan.
+    currency: String(plan.currency || 'USD').toLowerCase(),
     visibility: 'visible',
     // Travels on payment + membership events, which makes a renewal
     // recognisable even when the checkout metadata is not echoed back.
@@ -68,7 +76,7 @@ export async function provisionWhop({
   let canDedupeProducts = true;
   try {
     const found = (await collect(client.products.list({ account_id: accountId })))
-      .find((p) => p?.title === productTitle);
+      .find((p) => normalize(p?.title) === normalize(productTitle));
     if (found) product = { id: found.id, title: found.title, action: 'reuse' };
   } catch (e) { canDedupeProducts = false; fail('listing products', e); }
 
@@ -109,10 +117,27 @@ export async function provisionWhop({
       done('reuse', `${plan.slug}: already linked → ${plan.linked}`);
       continue;
     }
-    const match = existing.find((v) => v?.title === title);
+    const match = existing.find((v) => normalize(v?.title) === normalize(title));
     if (match) {
+      // A variant we reuse must cost what the plan costs. Settlement rejects an
+      // order whose amount disagrees, so linking a mismatched variant would turn
+      // every purchase into a parked order. Verify before linking, and say so.
+      let row = match;
+      if (typeof client.variants.retrieve === 'function') {
+        try { row = await client.variants.retrieve({ id: match.id }); }
+        catch { /* fall back to whatever the list gave us */ }
+      }
+      const actual = row?.initial_price ?? row?.renewal_price ?? null;
+      const expected = plan.priceCents / 100;
+      if (actual !== null && Number(actual) !== expected) {
+        const detail = `${actual} ${row?.currency || '?'} against the plan's ${expected} ${plan.currency}`;
+        variants.push({ slug: plan.slug, title, id: match.id, action: 'mismatch', reason: detail, price: Number(actual) });
+        log(`  ✖ ${plan.slug}: existing variant "${title}" costs ${detail} — NOT linked`);
+        errors.push({ step: `variant price for ${plan.slug}`, message: `existing variant ${match.id} costs ${detail}` });
+        continue;
+      }
       variants.push({ slug: plan.slug, title, id: match.id, action: 'found' });
-      done('reuse', `${plan.slug}: found existing variant "${title}" → ${match.id}`);
+      done('reuse', `${plan.slug}: found existing variant "${title}" (${actual ?? '?'} ${row?.currency || plan.currency}) → ${match.id}`);
       continue;
     }
     if (!(plan.priceCents > 0)) {
@@ -175,6 +200,12 @@ export async function provisionWhop({
     ? `created webhook ${webhook.id} for ${events.length} events`
     : `webhook ${webhook?.id || 'not created yet'} → ${webhookUrl}`);
 
-  const variantIdBySlug = new Map(variants.filter((v) => v.id).map((v) => [v.slug, v.id]));
+  // Only variants we created, or re-used after checking their price, may be
+  // linked. A mismatched or skipped entry still carries an id for reporting, so
+  // the action — not the presence of an id — decides linkability.
+  const linkable = new Set(['created', 'found', 'already-linked']);
+  const variantIdBySlug = new Map(
+    variants.filter((v) => v.id && linkable.has(v.action)).map((v) => [v.slug, v.id]),
+  );
   return { product, variants, webhook, variantIdBySlug, errors };
 }
