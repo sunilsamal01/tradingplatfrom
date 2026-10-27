@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import * as c from '../controllers/authController.js';
 import { validate } from '../validators/validationMiddleware.js';
-import { registerSchema, loginTokenSchema, verifyEmailSchema, resendOtpSchema, forgotSchema } from '../validators/authValidator.js';
+import { registerSchema, loginTokenSchema, verifyEmailSchema, resendOtpSchema, forgotSchema, changePasswordSchema } from '../validators/authValidator.js';
 import { authLimiter, otpLimiter } from '../middleware/rateLimitMiddleware.js';
 import { authenticate } from '../middleware/authMiddleware.js';
 const r = Router();
@@ -15,6 +15,7 @@ r.post('/google', authLimiter, validate(loginTokenSchema), c.google);
 r.post('/refresh', c.refresh);
 r.post('/logout', c.logout);
 r.post('/logout-all', authenticate, c.logoutAll);
+r.post('/change-password', authenticate, authLimiter, validate(changePasswordSchema), c.changePassword);
 r.post('/forgot-password', authLimiter, validate(forgotSchema), c.forgotPassword);
 r.post('/reset-password', authLimiter, c.resetPassword);
 r.get('/me', authenticate, c.me);

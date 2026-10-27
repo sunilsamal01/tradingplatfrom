@@ -1,5 +1,6 @@
 import Session from '../models/Session.js';
 import User from '../models/User.js';
+import mongoose from 'mongoose';
 import OTP from '../models/OTP.js';
 import bcrypt from 'bcryptjs';
 import { asyncHandler } from '../utils/asyncHandler.js';
@@ -162,6 +163,43 @@ export const logout = asyncHandler(async (req, res) => {
 export const logoutAll = asyncHandler(async (req, res) => {
   await Session.updateMany({ userId: req.user.sub }, { $set: { revoked: true } });
   clearAuthCookies(res); return ok(res, 'Logged out everywhere');
+});
+/**
+ * Changes the password of the signed-in account.
+ *
+ * The current password is required, so a stolen access token is not enough to
+ * take over an account. Every OTHER session is revoked on success: if the old
+ * password had leaked, whoever else was signed in with it is signed out. The
+ * caller's own session is kept, or changing your password would log you out.
+ */
+export const changePassword = asyncHandler(async (req, res) => {
+  const { currentPassword, newPassword } = req.body;
+  const user = await User.findById(req.user.sub).select('+passwordHash');
+  if (!user) return res.status(404).json({ success: false, message: 'Not found' });
+  if (!user.passwordHash) {
+    return res.status(400).json({
+      success: false,
+      message: 'This account signs in with Google, so it has no password to change.',
+      code: 'NO_LOCAL_PASSWORD',
+    });
+  }
+  const match = await bcrypt.compare(String(currentPassword || ''), user.passwordHash);
+  if (!match) {
+    await logLogin(user._id, req.ip, req.headers['user-agent'] || '', false);
+    return res.status(401).json({ success: false, message: 'Current password is incorrect', code: 'BAD_PASSWORD' });
+  }
+  user.passwordHash = await bcrypt.hash(String(newPassword), 12);
+  await user.save();
+  // Keep the session that made the request; revoke every other one.
+  const keep = req.user.sessionId && mongoose.Types.ObjectId.isValid(req.user.sessionId)
+    ? new mongoose.Types.ObjectId(req.user.sessionId)
+    : null;
+  await Session.updateMany(
+    { userId: user._id, ...(keep ? { _id: { $ne: keep } } : {}) },
+    { $set: { revoked: true } },
+  );
+  await logActivity(user._id, 'password_changed', { method: 'password' }, req.ip);
+  return ok(res, 'Password changed');
 });
 export const forgotPassword = asyncHandler(async (req, res) => {
   const { email } = req.body;
