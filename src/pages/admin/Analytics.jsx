@@ -7,7 +7,7 @@ import { BarChart3, TrendingUp, PieChart as PieIcon } from "lucide-react";
 import { adminApi } from "../../lib/admin.js";
 import { Panel } from "../../components/ui.jsx";
 import { PageHeader, QueryState, RefreshButton, StatCard } from "../../components/admin/primitives.jsx";
-import { fmtINR, fmtNum } from "../../components/admin/format.js";
+import { fmtMoney, fmtNum } from "../../components/admin/format.js";
 
 const CHART_AXIS = { stroke: "#3f4a63", fontSize: 11 };
 const tooltipStyle = {
@@ -32,15 +32,31 @@ export default function AdminAnalytics() {
 
   useEffect(() => { load(); }, [load]);
 
-  const revByMonth = (data?.revenueByMonth || []).map((r) => ({ month: r._id, revenue: r.revenue, count: r.count }));
+  // Revenue rows arrive per month AND currency. Adding 20 USD to 500 INR would
+  // produce a meaningless figure, so the chart shows one currency and the rest
+  // are reported separately rather than being folded in.
+  const rawRevenue = data?.revenueByMonth || [];
+  const totalsByCurrency = [...new Set(rawRevenue.map((r) => r._id?.currency || "USD"))]
+    .map((currency) => ({
+      currency,
+      total: rawRevenue
+        .filter((r) => (r._id?.currency || "USD") === currency)
+        .reduce((s, r) => s + (r.revenue || 0), 0),
+    }))
+    .sort((a, b) => b.total - a.total);
+  const primaryCurrency = totalsByCurrency[0]?.currency || "USD";
+  const totalRevenue = totalsByCurrency[0]?.total || 0;
+  const otherCurrencies = totalsByCurrency.slice(1);
+
+  const revByMonth = rawRevenue
+    .filter((r) => (r._id?.currency || "USD") === primaryCurrency)
+    .map((r) => ({ month: r._id?.month, revenue: r.revenue, count: r.count }));
   const regs = (data?.registrationsByDay || []).map((r) => ({ date: r._id, count: r.count }));
   const dauMau = data?.dauMau || { dau: 0, mau: 0 };
   const byPlan = (data?.byPlan || []).map((r) => ({ name: r._id || "unknown", value: r.count }));
   const byStatus = (data?.byStatus || []).map((r) => ({ name: r._id || "unknown", value: r.count }));
   const byProvider = (data?.byProvider || []).map((r) => ({ name: r._id || "unknown", value: r.count }));
   const successRate = data?.paymentSuccessRate?.successRate;
-
-  const totalRevenue = revByMonth.reduce((s, r) => s + (r.revenue || 0), 0);
 
   return (
     <div>
@@ -55,7 +71,7 @@ export default function AdminAnalytics() {
       {data && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatCard label="Revenue (all time)" icon={TrendingUp} tone="green" loading={loading} value={fmtINR(totalRevenue)} sub={`${fmtNum(revByMonth.length)} months`} />
+            <StatCard label="Revenue (all time)" icon={TrendingUp} tone="green" loading={loading} value={fmtMoney(totalRevenue, primaryCurrency)} sub={`${fmtNum(revByMonth.length)} months${otherCurrencies.length ? ` · also ${otherCurrencies.map((c) => fmtMoney(c.total, c.currency)).join(", ")}` : ""}`} />
             <StatCard label="Payment success" icon={BarChart3} tone="cyan" loading={loading} value={`${successRate ?? 0}%`} sub="confirmed / attempted" />
             <StatCard label="DAU / MAU" icon={PieIcon} tone="violet" loading={loading} value={`${fmtNum(dauMau.dau)} / ${fmtNum(dauMau.mau)}`} sub="last 1d / 30d" />
             <StatCard label="Registrations" icon={BarChart3} tone="white" loading={loading} value={fmtNum(regs.reduce((s, r) => s + (r.count || 0), 0))} sub="last 30 days" />
@@ -68,8 +84,8 @@ export default function AdminAnalytics() {
                   <BarChart data={revByMonth} margin={{ top: 6, right: 8, left: -8, bottom: 0 }}>
                     <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                     <XAxis dataKey="month" tick={CHART_AXIS} tickLine={false} axisLine={false} />
-                    <YAxis tick={CHART_AXIS} tickLine={false} axisLine={false} width={64} tickFormatter={(v) => fmtINR(v)} />
-                    <Tooltip {...tooltipStyle} formatter={(v) => [fmtINR(v), "Revenue"]} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
+                    <YAxis tick={CHART_AXIS} tickLine={false} axisLine={false} width={64} tickFormatter={(v) => fmtMoney(v, primaryCurrency)} />
+                    <Tooltip {...tooltipStyle} formatter={(v) => [fmtMoney(v, primaryCurrency), "Revenue"]} cursor={{ fill: "rgba(255,255,255,0.04)" }} />
                     <Bar dataKey="revenue" fill="#34d399" radius={[4, 4, 0, 0]} />
                   </BarChart>
                 </ResponsiveContainer>

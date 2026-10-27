@@ -8,7 +8,7 @@ import { adminApi } from "../../lib/admin.js";
 import { useAuth } from "../../context/useAuth.js";
 import { Badge, Button, Panel, Input, FormField, Segmented } from "../../components/ui.jsx";
 import { ConfirmDialog, DataTable, PageHeader, QueryState, RefreshButton, StatusPill } from "../../components/admin/primitives.jsx";
-import { fmtDate, fmtINR, fmtNum } from "../../components/admin/format.js";
+import { fmtDate, fmtMoney, fmtNum } from "../../components/admin/format.js";
 
 const roleTone = (role) => (role === "superadmin" ? "violet" : role === "admin" ? "accent" : role === "support" ? "warning" : "default");
 
@@ -313,7 +313,7 @@ export default function AdminUserDetail() {
         <Panel title="Payments" desc="Real provider transactions">
           <DataTable
             columns={[
-              { key: "amount", header: "Amount", render: (p) => <span className="num text-white">{fmtINR(p.amount)}</span> },
+              { key: "amount", header: "Amount", render: (p) => <span className="num text-white">{fmtMoney(p.amount, p.currency)}</span> },
               { key: "plan", header: "Plan", render: (p) => <span className="text-xs text-white/70">{p.plan || "—"}</span> },
               { key: "provider", header: "Provider", render: (p) => <Badge>{p.provider}</Badge> },
               { key: "status", header: "Status", render: (p) => <StatusPill status={p.status} /> },
@@ -332,7 +332,7 @@ export default function AdminUserDetail() {
             columns={[
               { key: "orderId", header: "Order", render: (p) => <span className="num text-xs text-white/70">{p.orderId}</span> },
               { key: "plan", header: "Plan", render: (p) => <span className="text-xs text-white/70">{p.plan || "—"}</span> },
-              { key: "amount", header: "Amount", render: (p) => <span className="num text-white">{fmtINR(p.amount)}</span> },
+              { key: "amount", header: "Amount", render: (p) => <span className="num text-white">{fmtMoney(p.amount, p.currency)}</span> },
               { key: "status", header: "Status", render: (p) => <StatusPill status={p.status} /> },
               { key: "createdAt", header: "Date", render: (p) => <span className="text-xs text-white/45">{fmtDate(p.createdAt)}</span> },
             ]}

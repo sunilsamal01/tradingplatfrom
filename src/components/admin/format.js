@@ -26,6 +26,17 @@ export const fmtMoney = (amount, currency = "USD", { fromCents = false, decimals
   return symbol ? `${symbol}${body}` : `${currency} ${body}`;
 };
 
+/**
+ * Money for a figure that may span currencies. With a known currency it is
+ * formatted properly; when the currency is null the total mixes currencies, so
+ * stamping a symbol on it would be a lie — say so instead.
+ */
+export const fmtAggregate = (amount, currency) => {
+  if (amount == null || Number.isNaN(Number(amount))) return "—";
+  if (currency) return fmtMoney(amount, currency);
+  return `${Number(amount).toLocaleString("en-US", { maximumFractionDigits: 2 })} (mixed)`;
+};
+
 export const fmtNum = (n) =>
   n == null || Number.isNaN(Number(n)) ? "—" : Number(n).toLocaleString("en-IN");
 

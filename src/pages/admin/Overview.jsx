@@ -10,7 +10,7 @@ import {
 import { adminApi } from "../../lib/admin.js";
 import { Badge, Panel } from "../../components/ui.jsx";
 import { DateRangePresets, PageHeader, QueryState, RefreshButton, StatCard, StatusPill, DataTable } from "../../components/admin/primitives.jsx";
-import { defaultRange, fmtDate, fmtINR, fmtNum } from "../../components/admin/format.js";
+import { defaultRange, fmtAggregate, fmtDate, fmtMoney, fmtNum } from "../../components/admin/format.js";
 
 const CHART_AXIS = { stroke: "#3f4a63", fontSize: 11 };
 const REDUCED_MOTION = typeof window !== "undefined" && window.matchMedia
@@ -89,16 +89,16 @@ export default function AdminOverview() {
             />
             <StatCard
               label="Net revenue" icon={IndianRupee} tone="green" loading={loading}
-              value={fmtINR(rev?.net)}
+              value={fmtAggregate(rev?.net, rev?.currency)}
               delta={rev?.netPct}
               sub={`vs previous period`}
-              tip={`Gross (paid): ${fmtINR(rev?.gross)} − Refunds: ${fmtINR(rev?.refunds)} = Net. Figures from confirmed payments only.`}
+              tip={`Gross (paid): ${fmtAggregate(rev?.gross, rev?.currency)} - Refunds: ${fmtAggregate(rev?.refunds, rev?.currency)} = Net. Figures from confirmed payments only.`}
             />
             <StatCard
               label="Payment success" icon={CreditCard} tone="amber" loading={loading}
               value={`${rev?.successRate ?? 0}%`}
               sub={`${fmtNum(rev?.paidCount)} paid / ${fmtNum(rev?.failed)} failed`}
-              tip={`${fmtNum(rev?.refundCount)} refund(s) totalling ${fmtINR(rev?.refunds)} in this period`}
+              tip={`${fmtNum(rev?.refundCount)} refund(s) totalling ${fmtAggregate(rev?.refunds, rev?.currency)} in this period`}
             />
           </div>
 
@@ -106,8 +106,8 @@ export default function AdminOverview() {
           <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 xl:grid-cols-6">
             <StatCard label="New users" icon={UserPlus} value={fmtNum(k?.users?.new)} sub={`prev ${fmtNum(k?.users?.newPrev)}`} loading={loading} tone="cyan" />
             <StatCard label="Verified" icon={Users} value={fmtNum(k?.users?.verified)} sub="email verified" loading={loading} tone="white" />
-            <StatCard label="Gross volume" icon={IndianRupee} value={fmtINR(rev?.gross)} sub="paid" loading={loading} tone="green" />
-            <StatCard label="Refunds" icon={CreditCard} value={fmtINR(rev?.refunds)} sub={`${fmtNum(rev?.refundCount)} refunds`} loading={loading} tone="rose" />
+            <StatCard label="Gross volume" icon={IndianRupee} value={fmtAggregate(rev?.gross, rev?.currency)} sub="paid" loading={loading} tone="green" />
+            <StatCard label="Refunds" icon={CreditCard} value={fmtAggregate(rev?.refunds, rev?.currency)} sub={`${fmtNum(rev?.refundCount)} refunds`} loading={loading} tone="rose" />
             <StatCard label="Failed payments" icon={ShieldAlert} value={fmtNum(rev?.failed)} sub={`prev ${fmtNum(rev?.failedPrev)}`} loading={loading} tone="amber" />
             <StatCard label="Active sessions" icon={Activity} value={fmtNum(k?.security?.activeSessions)} sub={`${fmtNum(k?.security?.failedLogins)} failed logins`} loading={loading} tone="violet" />
           </div>
@@ -126,8 +126,8 @@ export default function AdminOverview() {
                     </defs>
                     <CartesianGrid stroke="rgba(255,255,255,0.06)" vertical={false} />
                     <XAxis dataKey="date" tick={CHART_AXIS} tickLine={false} axisLine={false} minTickGap={28} />
-                    <YAxis tick={CHART_AXIS} tickLine={false} axisLine={false} width={64} tickFormatter={(v) => fmtINR(v)} />
-                    <Tooltip {...tooltipStyle} formatter={(v) => [fmtINR(v), "Revenue"]} />
+                    <YAxis tick={CHART_AXIS} tickLine={false} axisLine={false} width={64} tickFormatter={(v) => fmtAggregate(v, rev?.currency)} />
+                    <Tooltip {...tooltipStyle} formatter={(v) => [fmtAggregate(v, rev?.currency), "Revenue"]} />
                     <Area type="monotone" dataKey="value" stroke="#22d3ee" strokeWidth={2} fill="url(#revGrad)" isAnimationActive={!REDUCED_MOTION} />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -178,7 +178,7 @@ export default function AdminOverview() {
               actions={<Link to="/admin/transactions" className="inline-flex items-center gap-1 text-xs text-cyan-300 hover:text-cyan-200">All <ArrowUpRight className="h-3 w-3" /></Link>}>
               <DataTable
                 columns={[
-                  { key: "amount", header: "Amount", render: (r) => <span className="num text-white">{fmtINR(r.amount)}</span> },
+                  { key: "amount", header: "Amount", render: (r) => <span className="num text-white">{fmtMoney(r.amount, r.currency)}</span> },
                   { key: "status", header: "Status", render: (r) => <StatusPill status={r.status} /> },
                   { key: "createdAt", header: "Date", render: (r) => <span className="text-xs text-white/45">{fmtDate(r.createdAt)}</span> },
                 ]}

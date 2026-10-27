@@ -1,6 +1,23 @@
 import User from '../models/User.js';
 import Payment from '../models/Payment.js';
-export async function revenueByMonth() { return Payment.aggregate([{ $match: { status: 'paid' } }, { $group: { _id: { $dateToString: { format: '%Y-%m', date: '$createdAt' } }, revenue: { $sum: '$amount' }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]); }
+// Revenue by calendar month, kept per currency: 20 USD and 500 INR are not
+// addends, so the rows are never merged into one number.
+export async function revenueByMonth() {
+  return Payment.aggregate([
+    { $match: { status: 'paid' } },
+    {
+      $group: {
+        _id: {
+          month: { $dateToString: { format: '%Y-%m', date: '$createdAt' } },
+          currency: '$currency',
+        },
+        revenue: { $sum: '$amount' },
+        count: { $sum: 1 },
+      },
+    },
+    { $sort: { '_id.month': 1 } },
+  ]);
+}
 export async function registrationsByDay(days = 30) { const since = new Date(Date.now() - days * 864e5); return User.aggregate([{ $match: { createdAt: { $gte: since } } }, { $group: { _id: { $dateToString: { format: '%Y-%m-%d', date: '$createdAt' } }, count: { $sum: 1 } } }, { $sort: { _id: 1 } }]); }
 export async function usersBy(field) { return User.aggregate([{ $group: { _id: `$${field}`, count: { $sum: 1 } } }]); }
 export async function dauMau() {

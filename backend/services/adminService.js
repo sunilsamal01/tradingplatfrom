@@ -39,6 +39,18 @@ function prevRange({ start, end }) {
 
 const money = (n) => Math.round((n || 0) * 100) / 100;
 
+/**
+ * Collapses per-currency rows into one label. Returns the currency when every
+ * row agrees, null when several are present (summing $ and ₹ produces a number
+ * that means nothing, so it must not be labelled with either), and `fallback`
+ * when there is no data at all.
+ */
+export const soleCurrency = (rows = [], fallback = 'USD') => {
+  const seen = new Set(rows.map((r) => r._id).filter(Boolean));
+  if (seen.size === 1) return [...seen][0];
+  return seen.size === 0 ? fallback : null;
+};
+
 // ---------------------------------------------------------------------------
 // Overview / executive dashboard
 // ---------------------------------------------------------------------------
@@ -54,6 +66,7 @@ export async function overview({ from, to } = {}) {
     regByDay, revByDay, paymentsByDay,
     recentPayments, recentUsers, recentAdminActions,
     sessionsActive, notifUnread, newLogins, failedLogins,
+    paidByCurrency, refundByCurrency,
   ] = await Promise.all([
     User.countDocuments({}),
     User.countDocuments(inRange('createdAt')),
@@ -105,6 +118,15 @@ export async function overview({ from, to } = {}) {
     Notification.countDocuments({ userId: null, read: false }),
     LoginHistory.countDocuments({ success: true, createdAt: { $gte: range.start, $lt: range.end } }),
     LoginHistory.countDocuments({ success: false, createdAt: { $gte: range.start, $lt: range.end } }),
+    // Revenue is only meaningful per currency — never summed across them.
+    Payment.aggregate([
+      { $match: { status: 'paid', createdAt: { $gte: range.start, $lt: range.end } } },
+      { $group: { _id: '$currency', amount: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
+    Payment.aggregate([
+      { $match: { status: 'refunded', createdAt: { $gte: range.start, $lt: range.end } } },
+      { $group: { _id: '$currency', amount: { $sum: '$amount' }, count: { $sum: 1 } } },
+    ]),
   ]);
 
   const gross = paidAgg[0]?.amount || 0;
@@ -127,7 +149,11 @@ export async function overview({ from, to } = {}) {
         successRate: (paidAgg[0]?.count || 0) + failCount
           ? Math.round(((paidAgg[0]?.count || 0) / ((paidAgg[0]?.count || 0) + failCount)) * 1000) / 10
           : 0,
-        currency: 'INR',
+        // The real currency of the paid set (null when it spans several), so
+        // the UI never labels a USD total with ₹.
+        currency: soleCurrency(paidByCurrency),
+        byCurrency: Object.fromEntries(paidByCurrency.map((r) => [r._id || 'USD', money(r.amount)])),
+        refundsByCurrency: Object.fromEntries(refundByCurrency.map((r) => [r._id || 'USD', money(r.amount)])),
       },
       security: { activeSessions: sessionsActive, newLogins, failedLogins, broadcastsPending: notifUnread },
     },
@@ -252,11 +278,25 @@ export async function listPayments({ q, status, provider, currency, userId, from
     Payment.countDocuments(filter),
     Payment.find(filter).populate('userId', 'email firstName lastName')
       .sort({ [sortField]: sortDir, _id: sortDir }).skip((p - 1) * l).limit(l).lean(),
-    Payment.aggregate([{ $group: { _id: '$status', count: { $sum: 1 }, amount: { $sum: '$amount' } } }]),
+    Payment.aggregate([
+      // Grouped by currency as well as status: a per-status total that adds
+      // rupees to dollars cannot be displayed with either symbol.
+      { $group: { _id: { status: '$status', currency: '$currency' }, count: { $sum: 1 }, amount: { $sum: '$amount' } } },
+    ]),
   ]);
   return {
     items, total, page: p, pages: Math.max(1, Math.ceil(total / l)), limit: l,
-    summary: byStatus.reduce((a, r) => { a[r._id] = { count: r.count, amount: money(r.amount) }; return a; }, {}),
+    summary: byStatus.reduce((acc, r) => {
+      const status = r._id?.status || 'unknown';
+      const currency = r._id?.currency || 'USD';
+      const bucket = acc[status] || { count: 0, amount: 0, currency, mixed: false, byCurrency: {} };
+      bucket.count += r.count;
+      bucket.amount = money(bucket.amount + r.amount);
+      bucket.byCurrency[currency] = money((bucket.byCurrency[currency] || 0) + r.amount);
+      if (bucket.currency && bucket.currency !== currency) { bucket.currency = null; bucket.mixed = true; }
+      acc[status] = bucket;
+      return acc;
+    }, {}),
   };
 }
 

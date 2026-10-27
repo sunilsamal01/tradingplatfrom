@@ -5,7 +5,7 @@ import { adminApi } from "../../lib/admin.js";
 import { useAuth } from "../../context/useAuth.js";
 import { Badge, Button, Panel, Tooltip } from "../../components/ui.jsx";
 import { ConfirmDialog, DataTable, DateRangePresets, PageHeader, Pagination, QueryState, RefreshButton, SearchInput, SelectFilter, StatCard, StatusPill } from "../../components/admin/primitives.jsx";
-import { fmtDate, fmtINR, fmtNum } from "../../components/admin/format.js";
+import { fmtAggregate, fmtDate, fmtMoney, fmtNum } from "../../components/admin/format.js";
 
 const STATUS_OPTIONS = [
   { value: "paid", label: "Paid" },
@@ -63,7 +63,7 @@ export default function AdminTransactions() {
     setBusy(true);
     try {
       const d = await adminApi.refund(refundTarget._id, reason);
-      flash(d?.idempotent ? "Already refunded — no provider call made" : `Refunded ${fmtINR(refundTarget.amount)} via ${refundTarget.provider}`);
+      flash(d?.idempotent ? "Already refunded — no provider call made" : `Refunded ${fmtMoney(refundTarget.amount, refundTarget.currency)} via ${refundTarget.provider}`);
       setRefundTarget(null); setReason("");
       load();
     } catch (e) {
@@ -80,8 +80,8 @@ export default function AdminTransactions() {
     {
       key: "amount", header: "Amount", sortable: true,
       render: (p) => (
-        <Tooltip tip={`Currency: ${p.currency || "INR"}${p.plan ? ` · Plan: ${p.plan}` : ""}`}>
-          <span className="num font-medium text-white">{fmtINR(p.amount)}</span>
+        <Tooltip tip={`Currency: ${p.currency || "USD"}${p.plan ? ` · Plan: ${p.plan}` : ""}`}>
+          <span className="num font-medium text-white">{fmtMoney(p.amount, p.currency)}</span>
         </Tooltip>
       ),
     },
@@ -125,9 +125,9 @@ export default function AdminTransactions() {
       />
 
       <div className="mb-4 grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <StatCard label="Paid" value={fmtINR(summary.paid?.amount)} sub={`${fmtNum(summary.paid?.count)} payments`} tone="green" loading={loading && !data} />
-        <StatCard label="Failed" value={fmtNum(summary.failed?.count)} sub={fmtINR(summary.failed?.amount)} tone="rose" loading={loading && !data} />
-        <StatCard label="Refunded" value={fmtINR(summary.refunded?.amount)} sub={`${fmtNum(summary.refunded?.count)} refunds`} tone="violet" loading={loading && !data} />
+        <StatCard label="Paid" value={fmtAggregate(summary.paid?.amount, summary.paid?.currency)} sub={`${fmtNum(summary.paid?.count)} payments`} tone="green" loading={loading && !data} />
+        <StatCard label="Failed" value={fmtNum(summary.failed?.count)} sub={fmtAggregate(summary.failed?.amount, summary.failed?.currency)} tone="rose" loading={loading && !data} />
+        <StatCard label="Refunded" value={fmtAggregate(summary.refunded?.amount, summary.refunded?.currency)} sub={`${fmtNum(summary.refunded?.count)} refunds`} tone="violet" loading={loading && !data} />
         <StatCard label="In progress" value={fmtNum(summary.created?.count)} sub="created, unpaid" tone="amber" loading={loading && !data} />
       </div>
 
@@ -190,7 +190,7 @@ export default function AdminTransactions() {
 
       <ConfirmDialog
         open={!!refundTarget}
-        title={`Refund ${fmtINR(refundTarget?.amount)}?`}
+        title={`Refund ${fmtMoney(refundTarget?.amount, refundTarget?.currency)}?`}
         description={
           refundTarget
             ? `A ${refundTarget.provider} refund will be issued for payment ${refundTarget.providerPaymentId || refundTarget.providerOrderId || refundTarget._id}. This action is recorded in the audit log.`
